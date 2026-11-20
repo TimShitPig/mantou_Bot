@@ -176,6 +176,10 @@
         if (!panel) return;
         panel.hidden = false;
         $('msg-head-menu-toggle')?.setAttribute('aria-expanded', 'true');
+        if (msgState.chatType === 'group' && msgState.chatId && !msgState.chatRemoved) {
+          if (!msgState.adLoaded && !msgState.adLoading && !msgState.adSaving) void loadGroupAdSwitch();
+          if (!msgState.panSelectionData && !msgState.panSelectionLoading && !msgState.panSelectionSaving) void loadMsgPanSelection();
+        }
         const controls = modalFocusable(panel);
         if (focus) (focus === 'last' ? controls.at(-1) : controls[0])?.focus({preventScroll:true});
       };
@@ -2523,7 +2527,7 @@
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 100;
       const msgHistoryInitialPageSize = 50;
-      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionTimer:null, positionObserver:null, positionBody:null, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
         if (!button) return;
@@ -3438,7 +3442,7 @@
           chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListWindowStart:-1, chatListWindowEnd:-1, chatRenderSignature:null,
           adminRequestToken:msgState.adminRequestToken + 1, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'',
           panSelectionRequest:msgState.panSelectionRequest + 1, panSelectionData:null, panSelectionSaving:false, panSelectionLoading:false,
-          adChatId:'', adEnabled:false, adEditable:false, adLoading:false, adSaving:false, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0,
+          adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0,
         });
         for (const key of ['realtimeChats','groupMembership','adminByChat','adminScanAttempted','adminScanFailures','adminCheckedAt']) msgState[key].clear();
         clearMsgNewMessages(); resetComposer(); resetMsgAdSwitch(); updateMsgPanSelector(); syncMsgGroupingToggle();
@@ -4549,14 +4553,11 @@
         document.querySelectorAll('[data-msg-chat]').forEach((node) => {
           node.classList.toggle('active', node.dataset.msgKey === msgChatKey(chat));
         });
-        if (msgState.chatType === 'group') {
-          void loadGroupAdSwitch();
-          void loadMsgPanSelection();
-        } else {
+        if (msgState.chatType !== 'group') {
           msgState.panSelectionData = null;
           msgState.panSelectionRequest = Number(msgState.panSelectionRequest || 0) + 1;
-          updateMsgPanSelector();
         }
+        updateMsgPanSelector();
       };
       const scheduleMsgHistoryLoad = (chatId) => {
         const id = String(chatId || '').trim();
@@ -4957,10 +4958,11 @@
             : (enabled ? '当前群广告拦截已开启，点击关闭' : '当前群广告拦截已关闭，点击开启'));
       };
       const resetMsgAdSwitch = () => {
-        msgState.adChatId = String(msgState.chatId || '');
+        msgState.adRequest = Number(msgState.adRequest || 0) + 1;
+        msgState.adLoaded = false;
         msgState.adEnabled = false;
         msgState.adEditable = false;
-        msgState.adLoading = msgState.chatType === 'group' && Boolean(msgState.chatId) && !msgState.chatRemoved;
+        msgState.adLoading = false;
         msgState.adSaving = false;
         updateMsgAdSwitch();
       };
@@ -4968,21 +4970,24 @@
         const chatId = String(msgState.chatId || '').trim();
         const appid = msgState.chatAppid;
         if (msgState.chatType !== 'group' || !chatId || msgState.chatRemoved) return;
-        msgState.adChatId = chatId;
+        const request = Number(msgState.adRequest || 0) + 1;
+        msgState.adRequest = request;
+        const isCurrent = () => request === msgState.adRequest && msgMatchesCurrent('group', chatId, appid);
         msgState.adLoading = true;
         updateMsgAdSwitch();
         try {
           const data = await api('message/group-ad', {method:'POST', body:JSON.stringify({...captureGroupTarget(), chat_id:chatId, chat_type:'group', action:'get'})});
-          if (!msgMatchesCurrent('group', chatId, appid)) return;
+          if (!isCurrent()) return;
+          msgState.adLoaded = true;
           msgState.adEnabled = Boolean(data.enabled);
           msgState.adEditable = Boolean(data.editable);
         } catch (_) {
-          if (msgMatchesCurrent('group', chatId, appid)) {
+          if (isCurrent()) {
             msgState.adEnabled = false;
             msgState.adEditable = false;
           }
         } finally {
-          if (msgMatchesCurrent('group', chatId, appid)) {
+          if (isCurrent()) {
             msgState.adLoading = false;
             updateMsgAdSwitch();
           }
@@ -6902,6 +6907,12 @@
           msgState.positionBody = null;
         };
         apply();
+        // 纯文字布局已完成首屏定位，头像尺寸固定，可立即显示。
+        if (revealAfterPosition && !body.querySelector('.msg-bubble img, .msg-bubble video, .msg-bubble audio, .msg-bubble iframe')) {
+          reveal();
+          msgState.positionBody = null;
+          return;
+        }
         // rAF 在后台页或繁忙页面可能暂停，隐藏布局必须有独立的有界收尾。
         if (revealAfterPosition) msgState.positionTimer = setTimeout(finish, 750);
         if (revealAfterPosition && typeof requestAnimationFrame === 'function') {

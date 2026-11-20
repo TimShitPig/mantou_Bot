@@ -727,7 +727,10 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
     作者昵称 = str(记录.get("nickname") or "").strip()
     作者头像 = str(记录.get("avatar") or "").strip()
     内容文本 = str(记录.get("content") or "")
-    键盘按钮 = 提取消息键盘按钮(记录.get("keyboard_buttons") or 记录.get("raw_message"))
+    原文 = 记录.get("raw_message")
+    已解析原文 = _解析消息结构(原文)
+    # 键盘、作者和引用共用本条原文结构，保留原始载荷给网页查看。
+    键盘按钮 = 提取消息键盘按钮(记录.get("keyboard_buttons") or 已解析原文)
     if 键盘按钮:
         记录["keyboard_buttons"] = 键盘按钮
     群消息 = str(记录.get("chat_type") or "group") == "group"
@@ -756,9 +759,10 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
             and (not 内容文本.strip() or bool(re.search(r"\[(图片|语音|视频|文件|媒体|media)]", 内容文本, re.IGNORECASE)))
         )
     )
-    _补充记录机器人状态(记录)
+    作者原文 = 已解析原文 if isinstance(原文, (str, bytes)) else 原文
+    _补充记录机器人状态(记录, 作者原文)
     if 需要原始:
-        原始消息 = _解析消息结构(记录.get("raw_message"))
+        原始消息 = 已解析原文
         if 原始消息:
             if 群消息 and not _规范QQ群成员角色(记录.get("member_role")):
                 角色 = _提取QQ群消息作者角色(原始消息)
@@ -795,7 +799,7 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
         记录时间 = int(记录.get("ts") or 0)
     except (TypeError, ValueError):
         记录时间 = 0
-    _补充记录引用索引(记录, 原始消息)
+    _补充记录引用索引(记录, 已解析原文)
     标准时间 = 记录时间 or _转数字时间戳(记录.get("timestamp"))
     if not 标准时间 and 原始消息 is not None:
         标准时间 = _转数字时间戳(_提取原始消息时间(原始消息))
@@ -1124,7 +1128,9 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
     旧原始消息 = str(已有记录.get("raw_message") or "")
     新原始消息 = str(新记录.get("raw_message") or "")
     旧原始结构 = _解析消息结构(旧原始消息) if 旧原始消息 else None
-    新原始结构 = _解析消息结构(新原始消息) if 新原始消息 else None
+    新原始结构 = 旧原始结构 if 新原始消息 == 旧原始消息 else (
+        _解析消息结构(新原始消息) if 新原始消息 else None
+    )
     同官方群作者 = (
         bool(新消息ID) and 新消息ID == 旧消息ID
         and 新记录.get("chat_type") == 已有记录.get("chat_type") == "group"
@@ -7896,6 +7902,8 @@ def _聊天显示名(
     会话标识: str,
     会话: dict[str, Any],
     备注表: dict[str, Any] | None = None,
+    *,
+    联系人资料: dict[str, Any] | None = None,
 ) -> str:
     默认备注表 = 备注表 is None
     if 备注表 is None:
@@ -7917,7 +7925,7 @@ def _聊天显示名(
     if 群名:
         return 群名
     if 类型 == "user":
-        联系人 = _私聊联系人资料(会话标识, 会话)
+        联系人 = 联系人资料 if 联系人资料 is not None else _私聊联系人资料(会话标识, 会话)
         if 联系人["nickname"]:
             return 联系人["nickname"]
         if 联系人["nickname_blank"]:
@@ -8062,8 +8070,8 @@ def _数据库聚合聊天项(
             名称 = 备注 or str(信息.get("group_name") or 标识)
             头像 = _会话列表头像(标识, 类型, 最后, 信息)
         else:
-            名称 = 备注 or _聊天显示名(标识, 轻量, {标识:备注项})
             联系人 = _私聊联系人资料(标识, 轻量)
+            名称 = 备注 or _聊天显示名(标识, 轻量, {标识:备注项}, 联系人资料=联系人)
             头像 = str(联系人.get("avatar") or "")
         if 搜索 and 搜索 not in 名称 and 搜索 not in 标识:
             continue
@@ -8147,7 +8155,11 @@ def _数据库历史消息(
         内存消息记录 = [
             _快速规范化历史消息(消息项)
             for 消息项 in list(内存会话.get("messages") or [])
-            if str(消息项.get("appid") or "").strip() == appid and str(消息项.get("chat_type") or 类型) == 类型
+            if isinstance(消息项, dict)
+            and str(消息项.get("appid") or "").strip() == appid
+            and str(消息项.get("chat_type") or 类型) == 类型
+            # id 不经规范化改写，已在游标之外的热点消息无需复制和解析。
+            and (not before_id or int(消息项.get("id") or 0) < before_id)
         ]
         已有记录键 = {
             (
@@ -8158,9 +8170,7 @@ def _数据库历史消息(
             for 消息项 in 返回消息
         }
         for 消息项 in 内存消息记录:
-            if before_id and int(消息项.get("id") or 0) >= before_id:
-                continue
-            if not before_id and before_date and int(消息项.get("ts") or 0) >= int(_转数字时间戳(before_date) or 0):
+            if not before_id and before_date and int(消息项.get("ts") or 0) >= before_ts:
                 continue
             记录键 = (
                 _规范消息ID(消息项.get("message_id")),
