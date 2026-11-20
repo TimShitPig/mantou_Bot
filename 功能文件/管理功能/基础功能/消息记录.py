@@ -8121,6 +8121,92 @@ def 获取聊天列表(
     return {"chats": 返回, "total": 总数, "page": 页码, "page_size": 每页, "has_more": 每页 > 0 and 页码 * 每页 < 总数, "appid": appid or ""}
 
 
+def _筛选历史热点合并项(
+    数据库页: list[dict[str, Any]], 热点记录: list[dict[str, Any]], 最小库ID: int, 页内最早时间: int,
+) -> list[dict[str, Any]]:
+    """已落库且确定位于本页之前的孤立记录，无须再准备其展示字段。"""
+    if 最小库ID <= 0 or 页内最早时间 <= 0:
+        return 热点记录
+
+    def 确认在页外(项: dict[str, Any]) -> bool:
+        # 保留未落库记录、异常时间、时间相同和撤回覆盖项。
+        return (
+            0 < _整数时间戳(项.get("id")) < 最小库ID
+            and 0 < _整数时间戳(项.get("ts")) < 页内最早时间
+            and bool(_规范消息ID(项.get("message_id")))
+            and not 项.get("recalled")
+        )
+
+    页外 = [确认在页外(项) for 项 in 热点记录]
+    if not any(页外):
+        return 热点记录
+    全部 = [*数据库页, *热点记录]
+    # 缺失发送者或消息来源时，合并可能补齐身份。此时仍走完整路径。
+    if any(not 项.get("user_id") or not 项.get("source") for 项 in 全部):
+        return 热点记录
+
+    def 别名(项: dict[str, Any]) -> set[str]:
+        键 = set(_消息去重键(项))
+        消息ID = _规范消息ID(项.get("message_id"))
+        if 消息ID:
+            键.add(f"message:{消息ID}")
+        if 有键盘 and str(项.get("source") or "").strip().lower() == "qq_official":
+            # 合并键盘时原文可能重新序列化，保留同一官方发送者的相关记录。
+            键.add(f"official-author:{_规范消息ID(项.get('user_id'))}")
+        return 键
+
+    已见身份: dict[str, tuple[bool, str]] = {}
+    for 项 in 全部:
+        消息ID = _规范消息ID(项.get("message_id"))
+        if not 消息ID:
+            continue
+        是官方 = str(项.get("source") or "").strip().lower() == "qq_official"
+        身份 = 是官方, _规范消息ID(项.get("user_id"))
+        if 已见身份.setdefault(消息ID, 身份) != 身份:
+            # 同一 ID 的来源或发送者冲突可能在合并原文后产生新的别名。
+            return 热点记录
+
+    有键盘 = any(项.get("keyboard_buttons") or "keyboard" in str(项.get("raw_message") or "") for 项 in 全部)
+    全部别名 = [别名(项) for 项 in 全部]
+    见过: set[str] = set()
+    重复: set[str] = set()
+    for 键组 in 全部别名:
+        重复.update(见过 & 键组)
+        见过.update(键组)
+    保留 = [
+        项 for 项, 在页外, 键组 in zip(热点记录, 页外, 全部别名[len(数据库页):])
+        if not 在页外 or bool(重复 & 键组)
+    ]
+    return 保留 if len(保留) < len(热点记录) else 热点记录
+
+
+def _合并历史热点页(
+    返回消息: list[dict[str, Any]], 热点记录: list[dict[str, Any]],
+    before_date: str, before_id: int, before_ts: int, limit: int,
+) -> list[dict[str, Any]]:
+    def 记录键(消息项: dict[str, Any]) -> tuple[str, str, int]:
+        return (
+            _规范消息ID(消息项.get("message_id")),
+            str(消息项.get("content") or ""),
+            int(消息项.get("ts") or 0),
+        )
+
+    已有记录键 = {记录键(项): 项 for 项 in 返回消息}
+    完整记录 = [_快速规范化历史消息(项) for 项 in 热点记录]
+    for 消息项 in 完整记录:
+        if not before_id and before_date and int(消息项.get("ts") or 0) >= before_ts:
+            continue
+        键 = 记录键(消息项)
+        if 键 in 已有记录键:
+            _合并重复消息(已有记录键[键], 消息项)
+        else:
+            返回消息.append(消息项)
+            已有记录键[键] = 消息项
+    返回消息 = _去重消息列表(返回消息)
+    返回消息.sort(key=_历史消息排序键)
+    return 返回消息[-limit:]
+
+
 def _数据库历史消息(
     会话标识: str, 类型: str, before_date: str, limit: int, before_id: int = 0, appid: str = "",
 ) -> dict[str, Any] | None:
@@ -8153,44 +8239,25 @@ def _数据库历史消息(
         ]
         会话消息: list[dict[str, Any]] = _去重消息列表(原始会话消息)
         会话消息.sort(key=_历史消息排序键)
-        返回消息 = 会话消息[-limit:]
-        # 消息先写入内存再异步落库；数据库查询可能早于写入线程完成，
-        # 因此把本进程尚未出现在本页的接收/发送记录一起合并，避免实时消息延迟。
         内存会话 = _读取作用域会话缓存(会话标识, 类型, appid)
-        内存消息记录 = [
-            _快速规范化历史消息(消息项)
-            for 消息项 in list(内存会话.get("messages") or [])
-            if isinstance(消息项, dict)
-            and str(消息项.get("appid") or "").strip() == appid
-            and str(消息项.get("chat_type") or 类型) == 类型
-            # id 不经规范化改写，已在游标之外的热点消息无需复制和解析。
-            and (not before_id or int(消息项.get("id") or 0) < before_id)
+        热点记录 = [
+            项 for 项 in list(内存会话.get("messages") or [])
+            if isinstance(项, dict)
+            and str(项.get("appid") or "").strip() == appid
+            and str(项.get("chat_type") or 类型) == 类型
+            and (not before_id or int(项.get("id") or 0) < before_id)
         ]
-        已有记录键 = {
-            (
-                _规范消息ID(消息项.get("message_id")),
-                str(消息项.get("content") or ""),
-                int(消息项.get("ts") or 0),
-            ): 消息项
-            for 消息项 in 返回消息
-        }
-        for 消息项 in 内存消息记录:
-            if not before_id and before_date and int(消息项.get("ts") or 0) >= before_ts:
-                continue
-            记录键 = (
-                _规范消息ID(消息项.get("message_id")),
-                str(消息项.get("content") or ""),
-                int(消息项.get("ts") or 0),
-            )
-            if 记录键 not in 已有记录键:
-                返回消息.append(消息项)
-                已有记录键[记录键] = 消息项
-            else:
-                # 数据库写入可能尚未包含内存中的撤回、头像和引用更新。
-                _合并重复消息(已有记录键[记录键], 消息项)
-        返回消息 = _去重消息列表(返回消息)
-        返回消息.sort(key=_历史消息排序键)
-        返回消息 = 返回消息[-limit:]
+        候选 = 热点记录
+        if not before_date and len(会话消息) >= limit and len(热点记录) > limit:
+            最小库ID = min(_整数时间戳(项.get("id")) for 项 in 行列表)
+            页内最早时间 = _整数时间戳(会话消息[0].get("ts"))
+            候选 = _筛选历史热点合并项(会话消息, 热点记录, 最小库ID, 页内最早时间)
+        返回消息 = _合并历史热点页(会话消息[-limit:], 候选, before_date, before_id, before_ts, limit)
+        if 候选 is not 热点记录 and len(返回消息) < limit:
+            # 重复回调可能让数据库页在合并后不足一页，回退到完整热点记录补齐。
+            会话消息 = _去重消息列表([_快速规范化历史消息(项) for 项 in reversed(行列表)])
+            会话消息.sort(key=_历史消息排序键)
+            返回消息 = _合并历史热点页(会话消息[-limit:], 热点记录, before_date, before_id, before_ts, limit)
         _补齐群成员系统消息昵称(返回消息)
         最后消息 = 返回消息[-1] if 返回消息 else {}
         引用映射 = _构造引用映射(

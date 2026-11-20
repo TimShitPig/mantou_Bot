@@ -3039,9 +3039,12 @@ def 分页读取历史(
                 条件.append("ts < %s")
                 参数列表.append(before_ts)
             参数列表.append(查询上限)
+            # 先按完整作用域选出本页主键，再读取正文、媒体并计算原文 JSON 投影。
+            # LIMIT 阻止 MySQL 合并子查询，排序大历史时不搬运整行内容。
             游标.execute(
-                f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
-                f"WHERE {' AND '.join(条件)} ORDER BY id DESC LIMIT %s",
+                f"SELECT {_历史查询字段SQL} FROM ("
+                f"SELECT id FROM `{消息记录表名}` WHERE {' AND '.join(条件)} ORDER BY id DESC LIMIT %s"
+                f") AS history_page JOIN `{消息记录表名}` USING (id) ORDER BY id DESC",
                 tuple(参数列表),
             )
             行列表 = 游标.fetchall()
