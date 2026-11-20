@@ -5309,6 +5309,54 @@
           && !msgState.optimisticSends.get(row.dataset.msgOptimistic || '')
           && (isSelf || (msgState.botIsAdmin && !protectedRole));
       };
+      const msgKickInFlight = new Set();
+      const msgKickTargetCurrent = (target, generation) =>
+        activeView === 'messages' && consoleGeneration === generation && !msgState.chatRemoved
+        && msgMatchesCurrent('group', target.chat_id, target.appid)
+        && msgState.selectedAppid === target.appid;
+      const msgKickMemberId = (row, target) => {
+        if (!row?.isConnected || row.dataset.msgKickScope !== msgScopeKey('group', target.chat_id, target.appid)
+          || row.dataset.msgSelf === '1') return '';
+        const uid = row.dataset.msgUid || '';
+        const protectedRoles = ['owner', 'admin', 'administrator'];
+        const roles = [row.dataset.msgRole, msgState.profiles[uid]?.role];
+        if (roles.some((role) => protectedRoles.includes(String(role || '').trim().toLowerCase()))) return '';
+        return /^[A-Za-z0-9_-]{1,128}$/.test(uid) ? uid : '';
+      };
+      const kickMsgMember = async (target, row, generation) => {
+        if (!msgKickTargetCurrent(target, generation)) return;
+        const uid = msgKickMemberId(row, target);
+        if (!uid) return;
+        const key = JSON.stringify([target.appid, target.chat_id, uid]);
+        if (msgKickInFlight.has(key)) return;
+        const group = $('msg-head-name')?.textContent || target.chat_id;
+        const nickname = row.dataset.msgNick || uid;
+        if (!confirm(`确认将「${nickname}」踢出群聊「${group}」？`)) return;
+        if (!msgKickTargetCurrent(target, generation) || msgKickMemberId(row, target) !== uid) return;
+        msgKickInFlight.add(key);
+        try {
+          const result = await groupSettingsRequest({target}, 'message/group-members/remove', {member_openids:[uid]});
+          if (!msgKickTargetCurrent(target, generation)) return;
+          if (result.ok !== true || !Array.isArray(result.removed_openids) || !result.removed_openids.includes(uid)) {
+            toast('成员移除结果未确认，请刷新成员列表');
+            return;
+          }
+          toast('成员已移除');
+          void loadMsgChats(true);
+        } catch (error) {
+          if (!msgKickTargetCurrent(target, generation)) return;
+          if (error.status === 401) showAuthError(error);
+          else toast(error.data?.message || error.data?.error || '成员移除失败，请刷新成员列表确认');
+        } finally {
+          msgKickInFlight.delete(key);
+        }
+      };
+      const msgKickMenuItem = (row) => {
+        const target = captureGroupTarget();
+        const generation = consoleGeneration;
+        if (!target || !msgKickTargetCurrent(target, generation) || !msgKickMemberId(row, target)) return null;
+        return {label:'踢出用户', danger:true, action:() => { void kickMsgMember(target, row, generation); }};
+      };
       const buildMsgRowContextItems = (row) => {
         if (!row) return [];
         const mid = row.dataset.msgMid;
@@ -5329,6 +5377,8 @@
           const expires = Number(mute?.mute_expire_ts || 0);
           if (mute && (!expires || expires > Date.now() / 1000)) items.push({label:'解除禁言', action:() => unmuteMember(uid, nick)});
         }
+        const kick = msgKickMenuItem(row);
+        if (kick) items.push(kick);
         if (items.length && !isSelf) items.push({sep:true});
         if (mid && (!optimistic || (optimistic.status || row.dataset.msgSendStatus) === 'sent')) items.push({label:'引用', action:() => setMsgQuote(mid, uid, nick, content, refidx)});
         if (content) items.push({label:'复制', action:() => copyMsgText(content, row)});
@@ -7274,7 +7324,8 @@
           const av = isSelf && botMessage ? botProfileAvatar
             : (isSelf ? '' : (groupAuthorAvatar || profileAvatar || avatarUrl(m.user_id, 'user', m.appid || msgState.chatAppid)));
           const tags = [];
-          if (msgIsBot(m, profile)) tags.push('<span class="msg-tag bot">BOT</span>');
+          const botAuthor = msgIsBot(m, profile);
+          if (botAuthor) tags.push('<span class="msg-tag bot">BOT</span>');
           else if (isSelf) tags.push('<span class="msg-tag self">我</span>');
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
@@ -7283,6 +7334,10 @@
           const messageRole = msgMemberRole(m, profile);
           const botRole = currentBotMemberRole(m, isSelf);
           const memberRole = botRole || messageRole;
+          const kickScope = msgState.chatType === 'group' && m.chat_type === 'group' && m.source === 'qq_official'
+            && !isSelf && !botAuthor && m.appid === msgState.chatAppid
+            && (!m._session || m._session === msgState.chatId) && (!m.chat_id || m.chat_id === msgState.chatId)
+            ? msgScopeKey('group', msgState.chatId, msgState.chatAppid) : '';
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
           const roleTag = msgState.chatType === 'group' && String(m.chat_type || 'group') === 'group'
             ? (roleMap[memberRole] || '') : '';
@@ -7357,7 +7412,7 @@
           const muteStatusHtml = isMuted
             ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${hasRawData ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-kick-scope="${esc(kickScope)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${hasRawData ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
@@ -7445,7 +7500,9 @@
               items.push({label:'禁言', action:() => openMuteDialog(uid, nick)});
               if (msgState.mutes.has(uid)) items.push({label:'解除禁言', action:() => unmuteMember(uid, nick)});
             }
-            if (items.length) showMsgCtx(e.clientX, e.clientY, items);
+            const kick = msgKickMenuItem(row);
+            if (kick) items.push(kick);
+            if (items.length) showMsgCtx(e.clientX, e.clientY, items, row);
           });
         });
       };

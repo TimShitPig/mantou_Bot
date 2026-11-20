@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.481-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.482-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.481 |
+| 版本 | v6.1.482 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -193,6 +193,8 @@ UC、夸克、百度以配置目录为总目录，小说上传进入 `总目录/
 更换默认账号只影响新任务；历史归档绑定原账号，删除该账号可能影响读取。网页仅通过登录保护的同源代理读取，同账号下载最多8路，与上传独立计数；额度覆盖完整流式传输，连接跨文件复用。音视频支持 Range，普通文件按原名下载。缺少源地址的附件仍显示名称和大小，但不构造地址或发起归档；明确过期的源停止旧地址重试。旧蓝奏云归档只读兼容，不再提供新上传或批量迁移。
 
 ## 网页消息记录与群管理
+
+在群聊中右键普通成员的消息或头像，选择「踢出用户」并确认，即可请求将该成员移出当前群。机器人须拥有 QQ 官方的成员移除权限。
 
 打开会话时优先加载消息正文。群广告拦截与网盘选择在打开右上角菜单时加载，纯文字聊天在完成滚动定位后立即显示。
 
