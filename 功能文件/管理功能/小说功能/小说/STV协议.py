@@ -44,7 +44,7 @@ _CONNECTION_POOLS = globals().get("_CONNECTION_POOLS") or {}
 _ACCOUNT_QUERY_TIMEOUTS = (30.0, 60.0)
 _ACCOUNT_QUERY_RETRY_DELAY = 0.5
 _CHAPTER_DOWNLOAD_GATES = globals().get("_CHAPTER_DOWNLOAD_GATES") or {}
-_CHAPTER_DOWNLOAD_INTERVAL = 1.0
+STV_DOWNLOAD_CONCURRENCY = 100
 _CHAPTER_DOWNLOAD_ATTEMPTS = 3
 _CHAPTER_DOWNLOAD_MAX_WAIT = 60.0
 _CHAPTER_DOWNLOAD_BUDGET = 120.0
@@ -55,9 +55,12 @@ _CHAPTER_READ_PATH = "/"
 def _acquire_connector() -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     pool = _CONNECTION_POOLS.get(loop)
-    if pool is None or pool["connector"].closed:
+    if pool is None or pool["connector"].closed or pool["connector"].limit != STV_DOWNLOAD_CONCURRENCY:
+        if pool is not None and not pool["connector"].closed and pool["users"] == 0:
+            loop.create_task(_close_idle_connector(pool))
         pool = {"loop": loop, "connector": aiohttp.TCPConnector(
-            limit=8, limit_per_host=8, ttl_dns_cache=300, keepalive_timeout=30,
+            limit=STV_DOWNLOAD_CONCURRENCY, limit_per_host=STV_DOWNLOAD_CONCURRENCY,
+            ttl_dns_cache=300, keepalive_timeout=30,
         ), "users": 0, "idle": None}
         _CONNECTION_POOLS[loop] = pool
     if pool["idle"] is not None:
@@ -77,9 +80,10 @@ def _release_connector(pool: dict[str, Any]) -> None:
 
 async def _close_idle_connector(expected: dict[str, Any] | None = None) -> None:
     loop = asyncio.get_running_loop()
-    pool = _CONNECTION_POOLS.get(loop)
-    if pool is not None and (expected is None or pool is expected) and pool["users"] == 0:
-        _CONNECTION_POOLS.pop(loop, None)
+    pool = expected if expected is not None else _CONNECTION_POOLS.get(loop)
+    if pool is not None and pool["users"] == 0:
+        if _CONNECTION_POOLS.get(loop) is pool:
+            _CONNECTION_POOLS.pop(loop, None)
         if pool["idle"] is not None:
             pool["idle"].cancel()
         await pool["connector"].close()
@@ -303,22 +307,25 @@ class STVClient:
             return await self._request_once(method, path, params, data, limit=limit, mutation=mutation, account=account)
         loop = asyncio.get_running_loop()
         gate = _CHAPTER_DOWNLOAD_GATES.setdefault(
-            loop, {"lock": asyncio.Lock(), "next_at": 0.0, "cooldown_until": 0.0},
+            loop, {"cooldown_until": 0.0},
         )
+        # 热重载可保留旧串行门的冷却截止时间，但不再保留主动请求间隔。
+        if "semaphore" not in gate:
+            gate["semaphore"] = asyncio.Semaphore(STV_DOWNLOAD_CONCURRENCY)
         deadline = time.monotonic() + _CHAPTER_DOWNLOAD_BUDGET
         last_error = None
         try:
             async with asyncio.timeout(_CHAPTER_DOWNLOAD_BUDGET):
                 for attempt in range(1, _CHAPTER_DOWNLOAD_ATTEMPTS + 1):
-                    async with gate["lock"]:
-                        now = time.monotonic()
-                        delay = max(0.0, gate["next_at"] - now, gate["cooldown_until"] - now)
-                        if delay > _CHAPTER_DOWNLOAD_MAX_WAIT or now + delay >= deadline:
-                            raise last_error or STVError("rate_limited")
-                        if delay:
+                    async with gate["semaphore"]:
+                        while True:
+                            now = time.monotonic()
+                            delay = max(0.0, gate["cooldown_until"] - now)
+                            if delay > _CHAPTER_DOWNLOAD_MAX_WAIT or now + delay >= deadline:
+                                raise last_error or STVError("rate_limited")
+                            if not delay:
+                                break
                             await asyncio.sleep(delay)
-                        # 本地保守节奏，并非声明官方配额；不同下载会话共用。
-                        gate["next_at"] = time.monotonic() + _CHAPTER_DOWNLOAD_INTERVAL
                         try:
                             return await self._request_once(method, path, params, data, limit=limit)
                         except STVError as exc:
@@ -551,6 +558,72 @@ class STVClient:
                         raise STVError("chapter_empty", 200)
                     return {"title": str(data.get("chaptername") or ""), "content": content,
                             "reward_token_count": len(re.findall(r"<i(?:\s|>)", data.get("data") or "", re.IGNORECASE))}
+            finally:
+                jar.update_cookies({"transmode": old_mode}, response_url=origin)
+
+
+    async def chapter_batch(self, host: str, bookid: str, chapter_ids: list[str]) -> list[dict[str, Any] | None]:
+        """同一会话最多100路读取；切模式或刷新密钥前等待本批请求全部结束。"""
+        host, bookid = _identity(host, bookid)
+        if not self._chapter_download or not 0 < len(chapter_ids) <= STV_DOWNLOAD_CONCURRENCY:
+            raise STVError("invalid_input")
+        chapter_ids = [_item_id(cid) for cid in chapter_ids]
+
+        async def fetch(indices: list[int]) -> list[dict[str, Any]]:
+            tasks = [asyncio.create_task(self._chapter_raw(host, bookid, chapter_ids[index])) for index in indices]
+            try:
+                return await asyncio.gather(*tasks)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        async with self._reading_lock:
+            jar = self._session().cookie_jar
+            origin = URL(BASE)
+            saved_mode = jar.filter_cookies(origin).get("transmode")
+            old_mode = saved_mode.value if saved_mode is not None else "chinese"
+            results: list[dict[str, Any] | None] = [None] * len(chapter_ids)
+            pending = list(range(len(chapter_ids)))
+            refreshed: set[int] = set()
+            try:
+                for mode in ("name", "chinese"):
+                    jar.update_cookies({"transmode": mode}, response_url=origin)
+                    if self._key_target != (host, bookid) or not self._key:
+                        await self._chapter_key(host, bookid)
+                    data = await fetch(pending)
+                    renew = [offset for offset, item in enumerate(data)
+                             if pending[offset] not in refreshed and str(item.get("code")) in {"10001", "10002"}]
+                    if renew:
+                        await self._chapter_key(host, bookid)
+                        indices = [pending[offset] for offset in renew]
+                        refreshed.update(indices)
+                        for offset, item in zip(renew, await fetch(indices)):
+                            data[offset] = item
+                    fallback = []
+                    for index, item in zip(pending, data):
+                        try:
+                            self._chapter_code(item)
+                        except STVError as exc:
+                            if exc.category in {"login_required", "paid_chapter", "content_unavailable"}:
+                                continue
+                            raise
+                        try:
+                            content = html_to_chinese_text(item.get("data") or "")
+                        except (ValueError, TypeError) as exc:
+                            if mode == "chinese":
+                                raise STVError("chinese_body_missing", 200) from exc
+                            fallback.append(index)
+                            continue
+                        if not content.strip():
+                            raise STVError("chapter_empty", 200)
+                        results[index] = {"title": str(item.get("chaptername") or ""), "content": content,
+                                          "reward_token_count": len(re.findall(r"<i(?:\s|>)", item.get("data") or "", re.IGNORECASE))}
+                    if not fallback:
+                        break
+                    pending = fallback
+                return results
             finally:
                 jar.update_cookies({"transmode": old_mode}, response_url=origin)
 

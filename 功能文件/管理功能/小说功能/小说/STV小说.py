@@ -22,7 +22,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from .STV协议 import STVClient, STVError, _close_idle_connector
+from .STV协议 import STVClient, STVError, STV_DOWNLOAD_CONCURRENCY, _close_idle_connector
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
@@ -1412,24 +1412,24 @@ async def 生成STV下载回复流(event: Any, source: str, config: Any = None) 
             chapters = await client.catalog(host, number)
             if not chapters:
                 raise STVError("empty_catalog")
-            logger.info("STV小说开始下载：书籍编号=%s, 章节数=%s", identity, len(chapters))
+            logger.info("STV小说开始下载：书籍编号=%s, 章节数=%s, 并发数=%s",
+                        identity, len(chapters), min(STV_DOWNLOAD_CONCURRENCY, len(chapters)))
             yield "\n".join([f"书名：{detail['title']}", f"作者：{detail['author']}", f"状态：{detail['status']}",
                               f"章节：{len(chapters)} 章", f"字数：{格式化小说字数(detail['word_count'])}", "", "正在下载中请稍等....."])
             stage = "chapters"
             contents = []
             selected = []
             failures = 0
-            # 同本书的 key/readcontextid 绑定同一会话；不并发替换上下文。
-            for chapter in chapters:
-                try:
-                    body = await client.chapter(host, number, str(chapter["cid"]))
-                except STVError as exc:
-                    if exc.category in {"login_required", "paid_chapter", "content_unavailable"}:
+            # 每批100章复用同一会话和密钥，批内并发；结果仍按原目录顺序合并。
+            for offset in range(0, len(chapters), STV_DOWNLOAD_CONCURRENCY):
+                batch = chapters[offset:offset + STV_DOWNLOAD_CONCURRENCY]
+                bodies = await client.chapter_batch(host, number, [str(chapter["cid"]) for chapter in batch])
+                for chapter, body in zip(batch, bodies):
+                    if body is None:
                         failures += 1
                         continue
-                    raise
-                selected.append(chapter)
-                contents.append(body["content"])
+                    selected.append(chapter)
+                    contents.append(body["content"])
             if not contents:
                 raise STVError("empty_content")
         if failures:
