@@ -625,16 +625,23 @@ async def _下载盐言专栏(
     session: aiohttp.ClientSession, 来源: str, 书籍: dict[str, Any]
 ) -> dict[str, Any]:
     正文章节: list[dict[str, str]] = []
+    跳过章数 = 0
     总字数 = 0
     for 目录章节 in 书籍["chapters"]:
-        章节 = await _获取单章正文(session, 来源, 书籍["column_id"], 目录章节)
+        try:
+            章节 = await _获取单章正文(session, 来源, 书籍["column_id"], 目录章节)
+        except _盐言正文未就绪:
+            跳过章数 += 1
+            continue
         正文 = 章节.get("content", "")
         if (章节.get("section_id") != 目录章节["id"]
                 or not 去除章节正文重复标题(目录章节["title"], 正文).strip()):
             raise _盐言查询错误("body_incomplete")
         总字数 += len(re.sub(r"\s+", "", 正文))
         正文章节.append(章节)
-    return {**书籍, "chapters": 正文章节, "word_count": 总字数}
+    if not 正文章节 and 跳过章数:
+        raise _盐言正文未就绪("盐言章节正文尚未就绪")
+    return {**书籍, "chapters": 正文章节, "word_count": 总字数, "pending_chapter_count": 跳过章数}
 
 
 async def _准备盐言分享章节书籍(
@@ -745,14 +752,16 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 书籍 = await _下载盐言分享章节(session, 来源, 书籍)
             阶段 = "body_validate"
             章节 = list(书籍.get("chapters") or [])
-            if not 预期章数 or len(章节) != 预期章数 or any(not 项.get("content") for 项 in 章节):
+            跳过章数 = 书籍.get("pending_chapter_count", 0) if 专栏编号 else 0
+            if (not 章节 or len(章节) + 跳过章数 != 预期章数
+                    or any(not 项.get("content") for 项 in 章节)):
                 raise RuntimeError("盐言章节正文不完整")
             阶段 = "txt_assemble"
             yield 格式化下载提示(书籍)
             文件名, 文件内容 = 生成小说文件内容(书籍)
             logger.info(
                 f"盐言小说章节下载完成：业务编号={书籍.get('column_id')}, "
-                f"成功={len(章节)}, 总数={预期章数}, 字数={书籍.get('word_count')}, "
+                f"成功={len(章节)}, 补录跳过={跳过章数}, 总数={预期章数}, 字数={书籍.get('word_count')}, "
                 f"文件大小={len(文件内容)}"
             )
             阶段 = "cache_and_share_upload"
@@ -838,9 +847,11 @@ def 格式化下载提示(书籍: dict[str, Any]) -> str:
         f"状态：{书籍.get('status') or '完结'}",
         f"章节：{len(书籍.get('chapters') or [])} 章",
         f"字数：{格式化字数(书籍.get('word_count'))}",
-        "",
-        "正在下载中请稍等.....",
     ]
+    跳过章数 = 书籍.get("pending_chapter_count", 0)
+    if 跳过章数:
+        行列表.append(f"已跳过 {跳过章数} 章（正文正在补录中）")
+    行列表.extend(["", "正在下载中请稍等....."])
     return "\n".join(行列表)
 
 
