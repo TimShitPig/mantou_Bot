@@ -4558,6 +4558,18 @@ async def 下载QQ阅读第三方正文(
     return chapters
 
 
+async def 下载QQ阅读匿名免费正文(
+    book_id: str,
+    catalog: list[dict[str, Any]],
+    session: aiohttp.ClientSession,
+) -> list[dict[str, Any]]:
+    """账号失效后只用官方公开正文接口读取免费目录，不携带失效凭据。"""
+    if not catalog:
+        return []
+    with QQ阅读账号上下文(None):
+        return await 下载参考正文(book_id, catalog, session)
+
+
 async def 获取参考书籍目录(
     book_id: str,
     session: aiohttp.ClientSession | None = None,
@@ -5676,10 +5688,9 @@ async def 生成QQ阅读下载文件流(
                                             {键: account_vip[键] for 键 in ("auth_status", "auth_checked_at")})
                 except Exception as exc:
                     logger.warning("QQ阅读登录状态保存失败：错误类型=%s", type(exc).__name__)
-            if account_vip.get("auth_status") == "invalid":
+            账号已失效 = account_vip.get("auth_status") == "invalid"
+            if 账号已失效:
                 logger.warning("QQ阅读账号登录已失效：阶段=account, 分类=login_required")
-                yield {"kind": "error", "stage": stage, "code": "account_expired", "message": "阅读账号登录已失效，请联系管理员重新登录"}
-                return
             账号有VIP = bool(
                 account_vip.get("available") and account_vip.get("is_vip")
             )
@@ -5699,9 +5710,15 @@ async def 生成QQ阅读下载文件流(
                 yield {"kind": "error", "stage": stage, "code": "chapter_range_out_of_bounds", "message": "章节起点超出目录范围"}
                 return
             付费类型 = 获取QQ阅读书籍付费类型(details, catalog)
-            使用第三方正文 = not 账号有VIP and 付费类型 in {"free", "vip"}
+            使用第三方正文 = (
+                (not 账号有VIP and 付费类型 in {"free", "vip"})
+                or 账号已失效
+            )
             if 使用第三方正文:
-                # 第三方接口的 s/e 使用原目录位置，不能使用筛选后重排的 index。
+                # 失效账号的单章付费书仍先限定到明确免费章节；第三方接口的
+                # s/e 使用原目录位置，不能使用筛选后重排的 index。
+                if 账号已失效 and 付费类型 == "single":
+                    catalog = 获取QQ阅读可下载目录(details, catalog, False)
                 catalog = _获取QQ阅读带原始序号目录(catalog)
             else:
                 catalog = 获取QQ阅读可下载目录(details, catalog, 账号有VIP)
@@ -5713,7 +5730,11 @@ async def 生成QQ阅读下载文件流(
                 yield {"kind": "error", "stage": stage, "code": "paid_chapters", "message": 章节单独付费提示}
                 return
             details["chapters"] = len(catalog)
-            正文来源 = "第三方正文接口" if 使用第三方正文 else "官方账号接口"
+            正文来源 = (
+                "第三方正文接口" if 使用第三方正文 else
+                "无账号免费章节" if 账号已失效 else
+                "官方账号接口"
+            )
             logger.info(
                 f"QQ阅读开始下载：书籍编号={book_id}, 书名={details.get('title')}, "
                 f"作者={details.get('author')}, 章节数={len(catalog)}, "
@@ -5734,24 +5755,35 @@ async def 生成QQ阅读下载文件流(
                 try:
                     chapters = await 下载QQ阅读第三方正文(book_id, catalog)
                 except (RuntimeError, ValueError, aiohttp.ClientError, asyncio.TimeoutError) as 正文异常:
+                    if 账号已失效 and published:
+                        # 出版书目录缺少可供匿名校验的免费边界，
+                        # 不把未知权限的章节伪装成公开正文。
+                        raise
                     # 正文服务可能只提供免费部分。丢弃数量不完整的批次，
                     # 按官方目录费用和免费边界重取，不能把缺失前后的正文顺移。
                     免费目录 = _筛选QQ阅读章节范围(
                         获取QQ阅读可下载目录(details, 完整目录, False), 章节范围,
                     )
-                    if not 免费目录 or len(免费目录) >= len(catalog):
+                    if not 免费目录 or (not 账号已失效 and len(免费目录) >= len(catalog)):
                         raise
                     logger.warning(
                         "QQ阅读正文回退免费章节：书籍编号=%s, 原始章节数=%s, "
-                        "免费章节数=%s, 跳过章节数=%s, 错误类型=%s, 错误分类=%s, code=%s",
+                        "免费章节数=%s, 跳过章节数=%s, 正文来源=%s, 错误类型=%s, 错误分类=%s, code=%s",
                         book_id, len(catalog), len(免费目录), len(catalog) - len(免费目录),
+                        "无账号免费章节" if 账号已失效 else "第三方正文接口",
                         type(正文异常).__name__,
                         正文异常.category if isinstance(正文异常, _QQ阅读正文响应错误) else "source_failed",
                         正文异常.code if isinstance(正文异常, _QQ阅读正文响应错误) else "",
                     )
                     catalog = 免费目录
                     details["chapters"] = len(catalog)
-                    chapters = await 下载QQ阅读第三方正文(book_id, catalog)
+                    chapters = (
+                        await 下载QQ阅读匿名免费正文(book_id, catalog, session)
+                        if 账号已失效
+                        else await 下载QQ阅读第三方正文(book_id, catalog)
+                    )
+            elif 账号已失效:
+                chapters = await 下载QQ阅读匿名免费正文(book_id, catalog, session)
             else:
                 chapters = (
                     await 下载参考出版书正文(book_id, catalog, session)
