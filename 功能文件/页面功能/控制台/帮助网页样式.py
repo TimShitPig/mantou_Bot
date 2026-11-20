@@ -837,6 +837,7 @@
             .msg-btn.primary:hover { background:#0ea5e0; }
             .msg-body { flex:1 1 0; min-height:0; overflow-y:auto; padding:18px 16px 10px; background:var(--raised); overscroll-behavior:contain; scrollbar-gutter:stable; }
             .msg-body.msg-positioning { visibility:hidden; overflow-anchor:none; }
+            .msg-body.msg-follow-bottom { overflow-anchor:none; }
             .msg-loading { display:grid; gap:12px; padding:18px 8px; }
             .msg-loading span { display:block; width:68%; height:44px; border-radius:10px; background:#e7ebf0; animation:msg-loading-pulse 1.15s ease-in-out infinite alternate; }
             .msg-loading span:nth-child(2) { width:54%; margin-left:18%; animation-delay:.18s; }
