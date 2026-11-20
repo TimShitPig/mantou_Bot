@@ -1137,7 +1137,8 @@ def _推断找书搜索类型(评估结果: list[dict[str, Any]], 搜索类型: 
         return "mixed"
     if any(len(详情["tokens"]) > 1 and 详情["mixed_all"] for 详情 in 评估结果):
         return "mixed"
-    if not any(详情["title"]["tier"] >= 5 for 详情 in 评估结果) and any(
+    # 书名包含完整关键词时，精确同名作者不应把自动搜索变成仅查作者。
+    if not any(详情["title"]["tier"] >= 3 for 详情 in 评估结果) and any(
         详情["author"]["tier"] == 6 for 详情 in 评估结果
     ):
         return "author"
@@ -2851,7 +2852,7 @@ async def 聚合搜索(
     允许平台集合 = _规范化允许平台(允许平台)
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v24-fengdu",
+        tuple(_拆分查询词(关键词)), "search-v25-title-contains",
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
