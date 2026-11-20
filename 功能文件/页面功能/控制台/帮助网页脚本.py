@@ -2533,6 +2533,8 @@
       const msgHistoryInitialPageSize = 16;
       const msgHistoryMinScrollBatch = 8;
       const msgHistoryMaxScrollBatch = 24;
+      const msgHistoryPrefetchLifetime = 30000;
+      let msgHistoryPrefetch = null;
       const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyPreloadKey:'', historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
@@ -3285,6 +3287,7 @@
         msgState.historyRequest += 1;
         msgState.historyOlderRequest += 1;
         msgState.historyOlderLoading = false;
+        discardMsgHistoryPrefetch();
         msgState.historyScheduleToken += 1;
         msgState.initialScrollChatId = '';
         cancelMsgBottomPosition($('msg-body'), true);
@@ -3433,6 +3436,7 @@
       const switchMsgBotScope = (appid) => {
         const next = /^\d{4,32}$/.test(String(appid || '').trim()) ? String(appid).trim() : '';
         if (next === msgState.selectedAppid) return;
+        discardMsgHistoryPrefetch();
         closeMsgHeadMenu(); closeAdminPopover();
         msgState.scopeGeneration += 1;
         for (const key of ['historyAbort','historyOlderAbort','chatListAbort']) { msgState[key]?.abort(); msgState[key] = null; }
@@ -4525,6 +4529,7 @@
         }
         msgState.historyRequest = Number(msgState.historyRequest || 0) + 1;
         msgState.historyOlderRequest = Number(msgState.historyOlderRequest || 0) + 1;
+        discardMsgHistoryPrefetch();
         msgState.historyOlderLoading = false;
         msgState.historyScrollTop = 0;
         msgState.historyPreloadKey = '';
@@ -4650,6 +4655,7 @@
         return requestPromise;
       };
       const closeMsgEvents = () => {
+        discardMsgHistoryPrefetch();
         cancelMsgQuoteJump(true);
         stopMsgGroupSnapshots();
         cancelMsgBottomPosition($('msg-body'), true);
@@ -4810,6 +4816,7 @@
           msgState.historyRequest += 1; msgState.historyOlderRequest += 1; msgState.historyScheduleToken += 1;
           for (const key of ['historyAbort','historyOlderAbort']) { msgState[key]?.abort(); msgState[key] = null; }
           if (msgState.historyScheduleFrame != null) cancelAnimationFrame(msgState.historyScheduleFrame); msgState.historyScheduleFrame = null;
+          discardMsgHistoryPrefetch();
           msgState.historyOlderLoading = false; msgState.historyActiveScope = '';
           cancelMsgQuoteJump(true); cancelMsgRealtimeMessageRender(); closeMsgLightbox(); closeGroupSettings(); hideMsgCtx();
           msgModalIds.forEach((id) => setMsgModal(id, false));
@@ -7604,7 +7611,10 @@
           && (!currentAppid || currentAppid === eventAppid);
         // 实时事件不能改变当前选中的机器人身份。
         const messageKey = msgMessageKey(message);
-        if (msgIsRecalled(message)) msgState.historyCache.delete(chatKey);
+        if (msgIsRecalled(message)) {
+          msgState.historyCache.delete(chatKey);
+          if (msgHistoryPrefetch?.scope === chatKey) discardMsgHistoryPrefetch();
+        }
         const recalledIndex = matchesCurrent && messageKey ? msgState.messages.findIndex((item) => msgMessagesMatch(item, message)) : -1;
         if (msgIsRecalled(message) && recalledIndex >= 0) {
           msgState.messages = msgState.messages.map((item, index) => index === recalledIndex ? {...item, recalled:true} : item);
@@ -7788,6 +7798,46 @@
         else { msgState.selected.add(mid); row.classList.add('selected'); }
         $('msg-multi-count').textContent = `已选 ${msgState.selected.size} 条`;
       };
+      const discardMsgHistoryPrefetch = () => {
+        msgHistoryPrefetch?.controller.abort();
+        msgHistoryPrefetch = null;
+      };
+      const requestMsgHistoryPage = (chatId, chatType, appid, beforeId, beforeDate, limit, signal) => api('message/history', {
+        method:'POST', body:JSON.stringify({
+          chat_id:chatId, chat_type:chatType, appid,
+          before_date:beforeId ? '' : beforeDate, before_id:beforeId, limit,
+        }), signal,
+      });
+      const currentMsgHistoryPrefetch = (scope, beforeId, beforeDate) => {
+        const entry = msgHistoryPrefetch;
+        if (!entry) return null;
+        if (entry.scope === scope && entry.beforeId === beforeId && entry.beforeDate === (beforeId ? '' : beforeDate)
+          && !entry.controller.signal.aborted && Date.now() - entry.startedAt < msgHistoryPrefetchLifetime) return entry;
+        discardMsgHistoryPrefetch();
+        return null;
+      };
+      const warmMsgOlderHistory = () => {
+        if (!msgState.chatId || !msgState.historyData?.has_more || msgState.historyOlderLoading
+          || msgState.historyWindow || msgQuoteJump.pending || msgQuoteJump.anchorAbort
+          || $('page-messages')?.hidden || document.visibilityState === 'hidden') return;
+        const {chatId, chatType, chatAppid} = msgState;
+        const oldest = msgState.messages[0];
+        const beforeId = Number(oldest?.id || 0);
+        const beforeDate = beforeId ? '' : (oldest?.timestamp || '');
+        if (!beforeId && !beforeDate) return;
+        const scope = msgScopeKey(chatType, chatId, chatAppid);
+        if (currentMsgHistoryPrefetch(scope, beforeId, beforeDate)) return;
+        const controller = new AbortController();
+        const entry = {scope, beforeId, beforeDate, controller, startedAt:Date.now(), promise:null};
+        msgHistoryPrefetch = entry;
+        const timeout = setTimeout(() => controller.abort(), 18000);
+        // 只备好一个历史页。滚动接近边缘时复用响应，再按新游标预取下一页。
+        entry.promise = requestMsgHistoryPage(chatId, chatType, chatAppid, beforeId, beforeDate,
+          msgHistoryInitialPageSize, controller.signal).catch(() => {
+          if (msgHistoryPrefetch === entry) msgHistoryPrefetch = null;
+          return null;
+        }).finally(() => clearTimeout(timeout));
+      };
       const loadMsgHistory = async (older = false, quiet = false, authoritative = false, opening = false, olderLimit = msgHistoryInitialPageSize) => {
         if (!msgState.chatId) return;
         if (msgQuoteJump.pending || (quiet && msgState.historyWindow)) return;
@@ -7805,7 +7855,11 @@
         msgState[older ? 'historyOlderRequest' : 'historyRequest'] = requestId;
         const previousAbort = msgState[older ? 'historyOlderAbort' : 'historyAbort'];
         if (previousAbort) previousAbort.abort();
-        const controller = new AbortController();
+        const before = older ? (msgState.messages[0]?.timestamp || '') : '';
+        const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
+        const prefetched = older ? currentMsgHistoryPrefetch(requestScope, beforeId, before) : null;
+        if (prefetched) msgHistoryPrefetch = null;
+        const controller = prefetched?.controller || new AbortController();
         msgState[older ? 'historyOlderAbort' : 'historyAbort'] = controller;
         if (!older) msgState.historyActiveScope = requestScope;
         let timedOut = false;
@@ -7822,13 +7876,15 @@
           ? msgMessageKey(msgState.messages[msgState.messages.length - 1]) : '';
         const historyCacheKey = msgScopeKey(requestChatType, requestChatId, requestAppid);
         const messagesAtRequest = new Set(msgState.messages.map(msgMessageKey));
+        let loadedPage = false;
         try {
-          const before = older ? (msgState.messages[0]?.timestamp || '') : '';
-          const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
           const smallPage = opening && !older && !quiet && !returningWindow;
           const historyLimit = older ? olderLimit
             : (smallPage || quiet) ? msgHistoryInitialPageSize : msgHistoryPageSize;
-          const data = await api('message/history', {method:'POST', body:JSON.stringify({chat_id:requestChatId, chat_type:requestChatType, appid:requestAppid, before_date:beforeId ? '' : before, before_id:beforeId, limit:historyLimit}), signal:controller.signal});
+          let data = prefetched ? await prefetched.promise : null;
+          if (!requestIsCurrent() || controller.signal.aborted) return;
+          if (!data) data = await requestMsgHistoryPage(requestChatId, requestChatType, requestAppid,
+            beforeId, before, historyLimit, controller.signal);
           if (!requestIsCurrent() || (data.appid && String(data.appid).trim() !== requestAppid) || (data.chat_id && String(data.chat_id) !== requestChatId) || (data.chat_type && data.chat_type !== requestChatType)) return;
           data.messages = (data.messages || []).filter((message) => String(message?.appid || '').trim() === requestAppid
             && !msgIsKnownCleared(message, requestChatType, requestChatId, requestAppid));
@@ -7850,6 +7906,7 @@
               incoming,
             );
             cacheMsgHistory(historyCacheKey, {...data, messages:incoming.map((message) => ({...message}))});
+            loadedPage = true;
             if (forceInitialBottom) {
               msgState.initialScrollChatId = '';
               scrollMsgBodyToBottom(body, requestChatId);
@@ -7894,6 +7951,9 @@
             ...data,
             messages: msgState.messages.map((message) => ({...message})),
           });
+          loadedPage = !older || (incoming.length > 0 && (beforeId
+            ? Number(msgState.messages[0]?.id || 0) !== beforeId
+            : msgState.messages[0]?.timestamp !== before));
           if (!older && !renderNearBottom && newCount > 0) showMsgNewMessages(newCount);
           // 首次打开会话获取一次群内权限；继续向上分页时不重复请求官方接口。
           if (!older) {
@@ -7925,7 +7985,11 @@
             msgState[abortKey] = null;
             if (!older) msgState.historyActiveScope = '';
           }
-          if (older && requestId === msgState.historyOlderRequest) msgState.historyOlderLoading = false;
+          if (older && requestId === msgState.historyOlderRequest) {
+            msgState.historyOlderLoading = false;
+            if (!loadedPage) msgState.historyPreloadKey = '';
+          }
+          if (loadedPage && requestIsCurrent()) warmMsgOlderHistory();
         }
       };
       const rerenderMsgRoleTags = () => {
@@ -7983,6 +8047,7 @@
         });
       };
       const markLocalMessageRecalled = (messageId) => {
+        discardMsgHistoryPrefetch();
         const id = String(messageId || '').trim();
         if (!id) return;
         let changed = false;
@@ -8779,7 +8844,7 @@
         if (upwardDistance <= 0 || !msgState.chatId || !body.clientHeight
           || msgState.initialScrollChatId || msgQuoteJump.anchorAbort || msgQuoteJump.pending || msgQuoteJump.pagePending
           || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;
-        const threshold = Math.max(120, Math.min(700, body.clientHeight));
+        const threshold = 750;
         const top = Math.max(0, body.scrollTop);
         if (top > threshold) return;
         const oldest = msgState.messages[0];
@@ -8934,8 +8999,8 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { syncMsgNewMessagesDisplay(); if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
-      window.addEventListener('pagehide', () => { closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
+      document.addEventListener('visibilitychange', () => { syncMsgNewMessagesDisplay(); if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { discardMsgHistoryPrefetch(); closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
+      window.addEventListener('pagehide', () => { discardMsgHistoryPrefetch(); closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
         if (document.visibilityState === 'visible') { void loadBotProfile(); }
