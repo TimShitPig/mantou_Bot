@@ -378,21 +378,51 @@ async def 批量移除事件群成员(event, member_openids=None):
     return await _执行批量移除(chat_id, appid, http, member_openids, False)
 
 
+def _批量移除昵称快照(chat_id, appid, member_openids):
+    目标 = set(member_openids)
+    名单 = {}
+    for key, (_, 结果) in reversed(list(_读取缓存.items())):
+        if key[:2] != (appid, chat_id) or not 结果.get("ok"):
+            continue
+        if key[2] == "member":
+            项目 = [结果.get("member")]
+        elif key[2] == "members":
+            项目 = 结果.get("members", [])
+        else:
+            continue
+        for 成员 in 项目:
+            if isinstance(成员, dict) and 成员.get("member_openid") in 目标 and 成员.get("username"):
+                名单.setdefault(成员["member_openid"], 成员["username"])
+    for 标识 in 目标 - 名单.keys():
+        昵称 = 消息记录._读取群缓存昵称(chat_id, 标识, appid, 扫描消息=False)
+        if 昵称:
+            名单[标识] = 昵称
+    return 名单
+
+
 async def _执行批量移除(chat_id, appid, http, member_openids, add_to_member_blacklist):
     请求体 = {"member_openids": list(member_openids)}
     if add_to_member_blacklist:
         请求体["add_to_member_blacklist"] = True
     async with _群写入锁.setdefault((appid, chat_id), asyncio.Lock()):
+        名单 = _批量移除昵称快照(chat_id, appid, member_openids)
+        批次 = 消息记录.暂存批量群移除(chat_id, appid, member_openids, 名单)
+        已确认 = False
         try:
             结果 = await _请求(chat_id, appid, http, "remove", "POST", "/v2/groups/%s/batch_remove_members" % chat_id,
                            body=请求体)
+            已确认 = bool(结果["ok"] and 结果["data"].get("remove_members_result") == "success")
         finally:
             # 超时或热重载取消后也失效旧列表，不重放操作或宣称成功。
             _清缓存(appid, chat_id)
+            try:
+                await 消息记录.完成批量群移除(chat_id, appid, 批次, 已确认)
+            except Exception as 异常:
+                logger.debug("群移除通知记录失败：错误类型=%s", type(异常).__name__)
         if not 结果["ok"]:
             return 结果
         数据 = 结果["data"]
-        if 数据.get("remove_members_result") != "success":
+        if not 已确认:
             return _错误("remove_unconfirmed", "成员移除结果未确认，请刷新成员列表", 502)
         消息记录.标记群信息待刷新(chat_id, appid)
         失败 = _失败成员(数据, "add_to_member_blacklist_fail_openids", member_openids) if add_to_member_blacklist else []

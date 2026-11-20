@@ -3107,6 +3107,9 @@
         const text = plainMsgPreview(String(value || '').slice(0, 512));
         return text.length > 120 ? `${text.slice(0, 120)}…` : text;
       };
+      const msgRemovedMemberNames = (message) => message?.source === 'group_members_removed' && Array.isArray(message.system_members)
+        ? message.system_members.slice(0, 20).filter((name) => typeof name === 'string').map((name) => name.trim()).filter(Boolean)
+        : [];
       const msgMessagePreview = (message) => {
         const text = String(message.content || '');
         if (text.trim()) return text;
@@ -3155,6 +3158,7 @@
           index.set(key, summary);
         };
         const currentMessages = (messages || []).filter((message) => {
+          if (message.source === 'group_members_removed') return false;
           if (message._session && msgState.chatId && String(message._session) !== msgState.chatId) return false;
           if (message.chat_type && msgState.chatType && String(message.chat_type) !== msgState.chatType) return false;
           return !message.appid || !msgState.chatAppid || String(message.appid) === msgState.chatAppid;
@@ -6055,6 +6059,8 @@
         if (Array.isArray(incoming?.reference_ids)) merged.reference_ids = incoming.reference_ids.slice(0, 8);
         if (typeof incoming?.reference_conflict === 'boolean') merged.reference_conflict = incoming.reference_conflict;
         if (typeof incoming?.is_bot === 'boolean') merged.is_bot = incoming.is_bot;
+        const removedMembers = msgRemovedMemberNames(incoming);
+        if (removedMembers.length) merged.system_members = removedMembers;
         const privateContact = msgPrivateContactScope(incoming?.user_id || existing?.user_id, incoming || {})
           && msgPrivateContactScope(existing?.user_id, existing || {});
         const oldNameState = privateContact ? msgNicknameState(existing, existing.user_id) : null;
@@ -6123,6 +6129,7 @@
           const other = second[index];
           if (!msgMessagesMatch(message, other)) return false;
           if (String(message?.content || '') !== String(other?.content || '')) return false;
+          if (JSON.stringify(msgRemovedMemberNames(message)) !== JSON.stringify(msgRemovedMemberNames(other))) return false;
           if (msgIsRecalled(message) !== msgIsRecalled(other)) return false;
           if (String(message?.raw_message || '') !== String(other?.raw_message || '')) return false;
           if (String(message?.nickname || '') !== String(other?.nickname || '')) return false;
@@ -7414,6 +7421,7 @@
               id,
               message.timestamp || '',
               message.content || '',
+              msgRemovedMemberNames(message),
               message.media ? JSON.stringify(message.media) : '',
               msgIsRecalled(message) ? 1 : 0,
               message.nickname || '',
@@ -7448,8 +7456,10 @@
         }
         msgState.messageRenderSignature = renderSignature;
         let lastDay = ''; let html = '';
+        let renderedDepartureEnd = 0;
         if (data.has_more) html += '<button class="msg-load-older" id="msg-load-older" type="button">加载更早消息</button>';
         msgs.forEach((m, index) => {
+          if (index < renderedDepartureEnd) return;
           const day = String(m.timestamp||'').slice(0,10);
           if (day !== lastDay && day) {
             const label = fmtDayLabel(m.timestamp);
@@ -7460,10 +7470,41 @@
           }
           const systemSource = String(m.source || '');
           const renderKey = String(m.message_id || m.messageId || m.id || m.optimistic_id || '').trim();
-          if (['group_member_join','group_member_leave','friend_add','friend_del'].includes(systemSource)) {
+          if (systemSource === 'group_members_removed') {
+            const names = msgRemovedMemberNames(m);
+            const notice = names.length
+              ? '机器人将' + names.map((name) => '<span class="msg-system-name">' + esc(name) + '</span>').join('、') + '移出了群聊。'
+              : esc(String(m.content || '').trim() || '机器人将成员移出了群聊。');
+            html += '<div class="msg-system-row" data-msg-render-key="' + esc(renderKey) + '">'
+              + '<span class="msg-system-time">' + esc(fmtMsgTime(m.timestamp)) + '</span>'
+              + '<span class="msg-system-notice" role="note">' + notice + '</span></div>';
+            return;
+          }
+          if (systemSource === 'group_member_leave') {
+            const second = Number(m.ts);
+            let end = index + 1;
+            if (Number.isSafeInteger(second) && second > 0) {
+              while (end < msgs.length && end - index < 20 && msgs[end].source === 'group_member_leave'
+                && Number(msgs[end].ts) === second) end += 1;
+            }
+            renderedDepartureEnd = end;
+            const names = msgs.slice(index, end).map((item) =>
+              displayMsgNickname(item, profiles[String(item.user_id || '').trim()] || {}, '成员'))
+              .filter((name) => name && name !== '成员' && name !== '未知用户');
+            const count = end - index;
+            const named = names.map((name) => '<span class="msg-system-name">' + esc(name) + '</span>').join('、');
+            const members = names.length === count ? named
+              : named ? named + '等 ' + count + ' 位成员'
+              : count > 1 ? count + ' 位成员' : '成员';
+            html += '<div class="msg-system-row" data-msg-render-key="' + esc(renderKey) + '">'
+              + '<span class="msg-system-time">' + esc(fmtMsgTime(m.timestamp)) + '</span>'
+              + '<span class="msg-system-notice" role="note">' + members + '离开了群聊。</span></div>';
+            return;
+          }
+          if (['group_member_join','friend_add','friend_del'].includes(systemSource)) {
             const fallbackName = systemSource.startsWith('friend_') ? '用户' : systemSource === 'group_member_join' ? '新成员' : '成员';
             const memberName = displayMsgNickname(m, profiles[String(m.user_id || '').trim()] || {}, fallbackName);
-            const actionText = {group_member_join:'加入了群聊。', group_member_leave:'退出了群聊。', friend_add:'添加了机器人好友。', friend_del:'删除了机器人好友。'}[systemSource];
+            const actionText = {group_member_join:'加入了群聊。', friend_add:'添加了机器人好友。', friend_del:'删除了机器人好友。'}[systemSource];
             html += `<div class="msg-system-row" data-msg-render-key="${esc(renderKey)}"><span class="msg-system-time">${esc(fmtMsgTime(m.timestamp))}</span><span class="msg-system-notice"><span class="msg-system-name">${esc(memberName)}</span>${actionText}</span></div>`;
             return;
           }
@@ -9130,13 +9171,13 @@
         const visible = new Set();
         const view = body.getBoundingClientRect();
         if (body._msgRenderScope !== msgQuoteJumpScope() || !body.clientHeight) return {heights, visible, average:72};
-        const rows = Array.from(body.querySelectorAll('.msg-row[data-msg-mid]'));
-        const gap = rows.length ? (Number.parseFloat(getComputedStyle(rows[0]).marginBottom) || 0) : 0;
+        const rows = body.querySelectorAll('.msg-row[data-msg-mid], .msg-system-row[data-msg-render-key]');
         let total = 0;
         for (const row of rows) {
-          const id = normalizeMsgIdentity(row.dataset.msgMid);
+          const id = normalizeMsgIdentity(row.dataset.msgMid || row.dataset.msgRenderKey);
           const box = row.getBoundingClientRect();
           if (!id || !box.height) continue;
+          const gap = Number.parseFloat(getComputedStyle(row).marginBottom) || 0;
           heights.set(id, box.height + gap);
           total += box.height + gap;
           if (box.bottom > view.top && box.top < view.bottom) visible.add(id);

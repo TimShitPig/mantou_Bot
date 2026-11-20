@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 
-本地系统消息来源 = ("group_member_join", "group_member_leave", "friend_add", "friend_del")
+本地系统消息来源 = ("group_member_join", "group_member_leave", "group_members_removed", "friend_add", "friend_del")
 本地系统消息编号前缀 = ("group-event:", "friend-event:")
 
 

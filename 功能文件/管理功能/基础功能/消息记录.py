@@ -730,6 +730,8 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
     内容文本 = str(记录.get("content") or "")
     原文 = 记录.get("raw_message")
     已解析原文 = _解析消息结构(原文)
+    if 来源 == "group_members_removed":
+        记录["system_members"] = _群移除通知名单(记录, 已解析原文)
     # 键盘、作者和引用共用本条原文结构，保留原始载荷给网页查看。
     键盘按钮 = 提取消息键盘按钮(记录.get("keyboard_buttons") or 已解析原文)
     if 键盘按钮:
@@ -2278,6 +2280,8 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     # 实时消息与历史页使用同一份受限原始预览，不把完整事件对象推给浏览器。
     _补充记录引用索引(消息, 记录.get("raw_message"))
     消息["raw_message"] = _序列化原始消息(记录.get("raw_message"), 3000)
+    if 消息.get("source") == "group_members_removed":
+        消息["system_members"] = _群移除通知名单(记录, _解析消息结构(记录.get("raw_message")))
     键盘按钮 = 提取消息键盘按钮(消息.get("keyboard_buttons") or 记录.get("raw_message"))
     if 键盘按钮:
         消息["keyboard_buttons"] = 键盘按钮
@@ -4573,6 +4577,104 @@ def 记录好友关系事件(数据: dict[str, Any], 事件名: str, appid: str)
         raise
 
 
+_等待群移除确认 = globals().get("_等待群移除确认", {})
+_群移除回调去重 = globals().get("_群移除回调去重", {})
+_群移除回调窗口秒 = 30
+
+
+def _群移除通知名单(记录: dict[str, Any], 原文: Any) -> list[str]:
+    if (记录.get("source") != "group_members_removed"
+            or not str(记录.get("message_id") or "").startswith("group-event:")
+            or not isinstance(原文, dict) or 原文.get("event") != "LOCAL_GROUP_MEMBERS_REMOVED"):
+        return []
+    名单 = 原文.get("system_members")
+    if not isinstance(名单, list) or not 1 <= len(名单) <= 20:
+        return []
+    if any(not isinstance(名称, str) or not 1 <= len(名称) <= 128 for 名称 in 名单):
+        return []
+    return list(名单)
+
+
+def 暂存批量群移除(群: str, 应用: str, 成员: list[str], 昵称: dict[str, str]) -> dict[str, Any]:
+    """调用方持有同一机器人及群的写入锁，匹配回调只等待本次 POST。"""
+    批次 = {
+        "timestamp": int(time.time()), "members": dict.fromkeys(成员),
+        "names": dict(昵称), "rejoined": set(),
+    }
+    _等待群移除确认[(应用, 群)] = 批次
+    return 批次
+
+
+def _合并批量群移除回调(
+    群: str, 应用: str, 成员: str, 时间戳: Any, 事件编号: str, 昵称: str,
+    用户openid: str, 统一用户openid: str,
+) -> bool:
+    时间 = _转数字时间戳(时间戳)
+    if not 时间:
+        return False
+    键 = (应用, 群, 成员)
+    事件身份 = 事件编号 or str(时间)
+    近期 = _群移除回调去重.get(键)
+    if 近期:
+        截止, 开始, 已见 = 近期
+        if 截止 <= time.monotonic():
+            _群移除回调去重.pop(键, None)
+        elif 开始 <= 时间 <= 开始 + _群移除回调窗口秒 and (not 已见 or 已见 == 事件身份):
+            _群移除回调去重[键] = (截止, 开始, 事件身份)
+            return True
+    批次 = _等待群移除确认.get((应用, 群))
+    if (not 批次 or 成员 not in 批次["members"] or 成员 in 批次["rejoined"]
+            or not 批次["timestamp"] <= 时间 <= 批次["timestamp"] + _群移除回调窗口秒):
+        return False
+    已见回调 = 批次["members"][成员]
+    if 已见回调 is not None:
+        return 已见回调["identity"] == 事件身份
+    批次["members"][成员] = {
+        "identity": 事件身份,
+        "event": {"时间戳": 时间戳, "事件编号": 事件编号, "昵称": 昵称,
+                  "用户openid": 用户openid, "统一用户openid": 统一用户openid},
+    }
+    return True
+
+
+async def 完成批量群移除(群: str, 应用: str, 批次: dict[str, Any], 已确认: bool) -> None:
+    if _等待群移除确认.get((应用, 群)) is not 批次:
+        return
+    _等待群移除确认.pop((应用, 群), None)
+    成员 = 批次["members"]
+    if 已确认:
+        名单 = []
+        for 标识, 回调 in 成员.items():
+            昵称 = _有效用户昵称(回调["event"]["昵称"], 标识) if 回调 else ""
+            名单.append((昵称 or 批次["names"].get(标识) or "成员")[:128])
+        消息编号 = "group-event:" + secrets.token_hex(20)
+        记录 = 记录收到消息({
+            "id": 消息编号, "group_openid": 群,
+            "content": "机器人将" + "、".join(名单) + "移出了群聊。",
+            "raw_data": {"event": "LOCAL_GROUP_MEMBERS_REMOVED", "system_members": 名单},
+        }, "group", appid=应用, 源="group_members_removed", is_self=True)
+        if 记录:
+            现在 = time.monotonic()
+            for 键, 项 in list(_群移除回调去重.items()):
+                if 项[0] <= 现在:
+                    _群移除回调去重.pop(键, None)
+            for 标识, 回调 in 成员.items():
+                if 标识 in 批次["rejoined"]:
+                    continue
+                if len(_群移除回调去重) >= 4096:
+                    _群移除回调去重.pop(next(iter(_群移除回调去重)))
+                _群移除回调去重[(应用, 群, 标识)] = (
+                    现在 + _群移除回调窗口秒, 批次["timestamp"], 回调["identity"] if 回调 else "",
+                )
+            return
+    for 标识, 回调 in 成员.items():
+        if 回调:
+            await 记录群成员系统消息(
+                群, 标识, "group_member_remove", appid=应用,
+                _关联批量移除=False, **回调["event"],
+            )
+
+
 async def 记录群成员系统消息(
     会话标识: str,
     成员openid: str,
@@ -4584,6 +4686,7 @@ async def 记录群成员系统消息(
     事件编号: str = "",
     时间戳: Any = "",
     昵称: str = "",
+    _关联批量移除: bool = True,
 ) -> dict[str, Any] | None:
     """把官方群成员加入/退出事件写入消息历史和实时事件流。"""
     群标识 = str(会话标识 or "").strip()
@@ -4635,6 +4738,21 @@ async def 记录群成员系统消息(
                 候选标识列表.append(反向用户标识)
         except Exception:
             pass
+
+    应用 = str(appid or "").strip()
+    if _关联批量移除:
+        if 事件类型 == "group_member_add":
+            近期 = _群移除回调去重.get((应用, 群标识, 成员标识))
+            事件时间 = _转数字时间戳(时间戳)
+            if 近期 and 事件时间 and 事件时间 >= 近期[1]:
+                _群移除回调去重.pop((应用, 群标识, 成员标识), None)
+            批次 = _等待群移除确认.get((应用, 群标识))
+            if 批次 and 成员标识 in 批次["members"] and 事件时间 and 事件时间 >= 批次["timestamp"]:
+                批次["rejoined"].add(成员标识)
+        elif _合并批量群移除回调(
+            群标识, 应用, 成员标识, 时间戳, 事件编号, 昵称, 用户标识, str(统一用户openid or ""),
+        ):
+            return None
 
     成员昵称 = _有效用户昵称(str(昵称 or "").strip(), 成员标识)
     for 候选标识 in 候选标识列表:

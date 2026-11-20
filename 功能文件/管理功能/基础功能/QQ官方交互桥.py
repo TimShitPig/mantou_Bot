@@ -687,14 +687,10 @@ async def _同步群成员人数变化(
             bool(成员),
         )
         return
-    appid = str(
-        _读取字段(客户端, "appid")
-        or _读取字段(_读取字段(客户端, "platform"), "appid")
-        or ""
-    ).strip()
-    try:
-        from 功能文件.管理功能.基础功能 import 消息记录
+    from 功能文件.管理功能.基础功能 import 消息记录
 
+    appid = 消息记录._平台实例appid(客户端)
+    try:
         消息记录.调整群成员人数(
             群号,
             变化量,
@@ -712,8 +708,6 @@ async def _同步群成员人数变化(
             type(异常).__name__,
         )
     try:
-        from 功能文件.管理功能.基础功能 import 消息记录
-
         await 消息记录.记录群成员系统消息(
             群号,
             成员,
