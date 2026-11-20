@@ -5323,10 +5323,8 @@
         if (roles.some((role) => protectedRoles.includes(String(role || '').trim().toLowerCase()))) return '';
         return /^[A-Za-z0-9_-]{1,128}$/.test(uid) ? uid : '';
       };
-      const kickMsgMember = async (target, row, generation) => {
-        if (!msgKickTargetCurrent(target, generation)) return;
-        const uid = msgKickMemberId(row, target);
-        if (!uid) return;
+      const kickMsgMember = async (target, row, generation, uid) => {
+        if (!msgKickTargetCurrent(target, generation) || msgKickMemberId(row, target) !== uid) return;
         const key = JSON.stringify([target.appid, target.chat_id, uid]);
         if (msgKickInFlight.has(key)) return;
         const group = $('msg-head-name')?.textContent || target.chat_id;
@@ -5354,8 +5352,10 @@
       const msgKickMenuItem = (row) => {
         const target = captureGroupTarget();
         const generation = consoleGeneration;
-        if (!target || !msgKickTargetCurrent(target, generation) || !msgKickMemberId(row, target)) return null;
-        return {label:'踢出用户', danger:true, action:() => { void kickMsgMember(target, row, generation); }};
+        if (!target || !msgKickTargetCurrent(target, generation)) return null;
+        const uid = msgKickMemberId(row, target);
+        if (!uid) return null;
+        return {label:'踢出用户', danger:true, action:() => { void kickMsgMember(target, row, generation, uid); }};
       };
       const buildMsgRowContextItems = (row) => {
         if (!row) return [];
