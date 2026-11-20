@@ -2531,7 +2531,10 @@
       // ---------- 消息记录页 ----------
       const msgHistoryPageSize = 96;
       const msgHistoryInitialPageSize = 16;
-      const msgHistoryMinScrollBatch = 8;
+      const msgHistoryMinScrollBatch = 2;
+      const msgHistoryViewportScreens = 9;
+      const msgHistoryPreloadScreens = 3;
+      const msgHistoryStepScreens = 2;
       const msgHistoryMaxScrollBatch = 24;
       const msgHistoryPrefetchLifetime = 30000;
       const msgHistoryPrefetchSize = 48;
@@ -3419,7 +3422,7 @@
           const body = $('msg-body');
           const distance = older ? body.scrollTop : body.scrollHeight - body.clientHeight - body.scrollTop;
           // Keep a completed page ready if the reader has already moved away.
-          if (automatic && distance > msgHistorySwitchDistance(body, 350)) {
+          if (automatic && distance > msgHistorySwitchDistance(body)) {
             if (prefetched) rememberMsgHistoryPrefetch(direction, prefetched);
             return;
           }
@@ -3433,8 +3436,8 @@
           const reverseCursor = msgWindowCursor(reverseDirection);
           const reverseHasMore = older ? windowState.has_newer : Boolean(msgState.historyData?.has_more);
           const merged = dedupeMsgMessages(older ? [...incoming, ...existing] : [...existing, ...incoming]);
-          const trimmed = merged.length > msgHistoryPageSize;
-          const messages = older ? merged.slice(0, msgHistoryPageSize) : merged.slice(-msgHistoryPageSize);
+          const {messages, removed} = sliceMsgHistoryViewport(body, merged, older ? 'before' : 'after', true);
+          const trimmed = removed.length > 0;
           const history = msgState.historyData || {};
           const hasMore = older ? Boolean(data.has_more) && merged.length > existing.length : trimmed || Boolean(history.has_more);
           windowState.has_newer = older ? trimmed || windowState.has_newer : Boolean(data.has_newer) && merged.length > existing.length;
@@ -3446,7 +3449,7 @@
             ...history, ...data, messages, has_more:hasMore, has_newer:windowState.has_newer,
             member_profiles:mergeMsgProfileMaps(history.member_profiles, data.member_profiles),
           };
-          renderMsgMessages(next, {prepend:older, preservePosition:true, preserveAnchor:true, previousTop, previousHeight});
+          renderMsgMessages(next, {prepend:older, preservePosition:true, preserveAnchor:true, viewportReady:true, previousTop, previousHeight});
           if (!msgState.historyWindow) cacheMsgHistory(scope, next);
           else {
             if (remainder && merged.length > existing.length) {
@@ -3454,7 +3457,6 @@
               if (nextCursor) cacheMsgHistoryRemainder(direction, JSON.stringify(nextCursor), remainder, prefetched);
             }
             if (trimmed) {
-              const removed = older ? merged.slice(msgHistoryPageSize) : merged.slice(0, -msgHistoryPageSize);
               cacheMsgHistoryReversal(reverseDirection, scope, reverseCursor, removed, history, reverseHasMore);
             }
           }
@@ -7304,8 +7306,7 @@
           && !scroll.prepend && (opening || following || (!scroll.preservePosition && !msgState.bottomFollowPaused
             && (Boolean(scroll.toBottom) || msgBodyNearBottom(body))));
         const initialPositioning = opening && keepLatestVisible && msgState.renderedChatId !== msgState.chatId;
-        const renderScope = JSON.stringify([msgState.chatType, msgState.chatId,
-          String(msgState.chatAppid || '').trim()]);
+        const renderScope = msgQuoteJumpScope();
         const previousData = body._msgRenderScope === renderScope ? (msgState.historyData || {}) : {};
         data = {
           ...previousData,
@@ -7315,18 +7316,20 @@
         };
         if (msgState.chatType === 'user') data = {...data, ...syncMsgFriendState(msgState.chatId, data)};
         let serverMessages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
-        if (serverMessages.length > msgHistoryPageSize) {
-          const untrimmed = serverMessages;
-          const keepOlder = scroll.prepend || (!keepLatestVisible && !opening && !msgState.historyWindow && !scroll.toBottom);
-          serverMessages = keepOlder ? serverMessages.slice(0, msgHistoryPageSize) : serverMessages.slice(-msgHistoryPageSize);
+        const keepOlder = scroll.prepend || (!keepLatestVisible && !opening && !msgState.historyWindow && !scroll.toBottom);
+        const viewport = scroll.viewportReady || msgState.historyWindow || msgQuoteJump.pending || msgQuoteJump.anchorAbort
+          ? {messages:serverMessages, removed:[]}
+          : sliceMsgHistoryViewport(body, serverMessages, keepOlder ? 'before' : 'after',
+            !opening && !keepLatestVisible && !scroll.toBottom);
+        serverMessages = viewport.messages;
+        if (viewport.removed.length) {
           if (keepOlder) {
             const detached = {scope:msgQuoteJumpScope(), browsing:true, has_newer:true};
             updateMsgWindowCursors(detached, serverMessages);
             msgState.historyWindow = detached;
             discardMsgHistoryPrefetch();
-            const removed = untrimmed.slice(msgHistoryPageSize);
             cacheMsgHistoryReversal('after', msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid),
-              null, removed, {...data, chat_id:msgState.chatId, chat_type:msgState.chatType}, false);
+              null, viewport.removed, {...data, chat_id:msgState.chatId, chat_type:msgState.chatType}, false);
           } else {
             data.has_more = true;
             scroll = {...scroll, preserveAnchor:!keepLatestVisible};
@@ -8064,7 +8067,7 @@
           let remainder = null;
           if (older) {
             const split = splitMsgHistoryPage(data, 'before', {before_id:beforeId},
-              beforeId ? Math.max(olderLimit, msgHistoryInitialPageSize) : olderLimit, requestChatType, requestChatId, requestAppid);
+              olderLimit, requestChatType, requestChatId, requestAppid);
             data = split.page;
             remainder = beforeId ? split.remainder : null;
           } else data.messages = sanitizeMsgHistoryPage(data, 'after', null, requestChatType, requestChatId, requestAppid);
@@ -9031,13 +9034,56 @@
         readComposerMediaFile(file, 4);
       });
       $('msg-media-clear').addEventListener('click', clearComposerMedia);
-      const msgHistorySwitchDistance = (body, delta = 0) => Math.min(2200,
-        Math.max(750, body.clientHeight * 1.5) + Math.min(700, Math.abs(delta) * 2));
+      const measureMsgHistoryViewport = (body) => {
+        const heights = new Map();
+        const visible = new Set();
+        const view = body.getBoundingClientRect();
+        if (body._msgRenderScope !== msgQuoteJumpScope() || !body.clientHeight) return {heights, visible, average:72};
+        const rows = Array.from(body.querySelectorAll('.msg-row[data-msg-mid]'));
+        const gap = rows.length ? (Number.parseFloat(getComputedStyle(rows[0]).marginBottom) || 0) : 0;
+        let total = 0;
+        for (const row of rows) {
+          const id = normalizeMsgIdentity(row.dataset.msgMid);
+          const box = row.getBoundingClientRect();
+          if (!id || !box.height) continue;
+          heights.set(id, box.height + gap);
+          total += box.height + gap;
+          if (box.bottom > view.top && box.top < view.bottom) visible.add(id);
+        }
+        return {heights, visible, average:heights.size ? total / heights.size : 72};
+      };
+      const sliceMsgHistoryViewport = (body, messages, direction, preserveVisible) => {
+        if (messages.length <= msgHistoryMinScrollBatch) return {messages, removed:[]};
+        const {heights, visible, average} = measureMsgHistoryViewport(body);
+        const budget = body.clientHeight ? body.clientHeight * msgHistoryViewportScreens : Infinity;
+        const older = direction === 'before';
+        let count = 0;
+        let required = 0;
+        let height = 0;
+        const limit = Math.min(messages.length, msgHistoryPageSize);
+        for (let index = 0; index < limit; index += 1) {
+          const id = msgMessageKey(messages[older ? index : messages.length - 1 - index]);
+          height += heights.get(id) || average;
+          if (height <= budget || count < msgHistoryMinScrollBatch) count += 1;
+          if (preserveVisible && visible.has(id)) required = index + 1;
+        }
+        // The current screen remains in the slice even if a tall row crosses the budget.
+        count = Math.max(count, required);
+        return older
+          ? {messages:messages.slice(0, count), removed:messages.slice(count)}
+          : {messages:messages.slice(-count), removed:messages.slice(0, -count)};
+      };
+      const msgHistorySwitchDistance = (body) => body.clientHeight * msgHistoryPreloadScreens;
+      const msgHistoryScrollBatch = (body) => {
+        const {average} = measureMsgHistoryViewport(body);
+        const count = Math.ceil(body.clientHeight * msgHistoryStepScreens / Math.max(30, average));
+        return Math.max(msgHistoryMinScrollBatch, Math.min(msgHistoryMaxScrollBatch, count));
+      };
       const maybeLoadOlderMessages = (body, upwardDistance) => {
         if (upwardDistance <= 0 || !msgState.chatId || !body.clientHeight
           || msgState.initialScrollChatId || msgQuoteJump.anchorAbort || msgQuoteJump.pending || msgQuoteJump.pagePending
           || msgState.historyOlderLoading || !msgState.historyData?.has_more) return;
-        const threshold = msgHistorySwitchDistance(body, upwardDistance);
+        const threshold = msgHistorySwitchDistance(body);
         const top = Math.max(0, body.scrollTop);
         if (top > threshold) return;
         const oldest = msgState.messages[0];
@@ -9047,9 +9093,7 @@
           Boolean(msgState.historyWindow), cursor]);
         if (key === msgState.historyPreloadKey) return;
         msgState.historyPreloadKey = key;
-        const rowHeight = Math.max(30, body.scrollHeight / Math.max(1, msgState.messages.length));
-        const desiredHeight = threshold * 2 - top + Math.min(threshold, upwardDistance);
-        const limit = Math.min(msgHistoryMaxScrollBatch, Math.max(msgHistoryMinScrollBatch, Math.ceil(desiredHeight / rowHeight)));
+        const limit = msgHistoryScrollBatch(body);
         if (msgState.historyWindow) void loadMsgWindowPage('before', limit, true).finally(() => {
           if (msgState.historyPreloadKey === key) msgState.historyPreloadKey = '';
         });
@@ -9058,8 +9102,8 @@
       const maybeLoadNewerMessages = (body, upwardDistance) => {
         if (upwardDistance >= 0 || !canPageMsgWindow('after') || msgQuoteJump.anchorAbort
           || msgQuoteJump.pending || msgQuoteJump.pagePending || !body.clientHeight) return;
-        if (body.scrollHeight - body.clientHeight - body.scrollTop > msgHistorySwitchDistance(body, upwardDistance)) return;
-        void loadMsgWindowPage('after', msgHistoryInitialPageSize, true);
+        if (body.scrollHeight - body.clientHeight - body.scrollTop > msgHistorySwitchDistance(body)) return;
+        void loadMsgWindowPage('after', msgHistoryScrollBatch(body), true);
       };
       const msgChatsNode = $('msg-chats');
       const flushPendingMsgChats = () => {
