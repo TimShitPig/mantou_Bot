@@ -88,6 +88,7 @@ from .帮助网页脚本 import 控制台脚本
                   <div class="msg-head-sub" id="msg-head-sub">左侧列表选择群聊或私聊查看消息</div>
                 </div>
                 <div class="msg-head-actions msg-head-menu">
+                  <button class="msg-btn msg-recall-filter" id="msg-recall-filter" type="button" aria-pressed="false" aria-controls="msg-body" hidden>显示撤回</button>
                   <button class="msg-btn msg-head-menu-toggle" id="msg-head-menu-toggle" type="button" aria-label="会话操作" title="会话操作" aria-expanded="false" aria-controls="msg-head-menu-panel"><span aria-hidden="true">⋮</span></button>
                   <div class="msg-head-menu-panel" id="msg-head-menu-panel" role="group" aria-label="会话操作" hidden>
                   <span class="msg-admin-tag" id="msg-admin-tag" hidden>机器人是管理员</span>

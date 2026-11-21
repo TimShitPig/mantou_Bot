@@ -556,6 +556,7 @@ def _初始化数据库结构() -> bool:
                     KEY idx_msg_records_session (会话标识, ts),
                     KEY idx_msg_records_session_id (会话标识, id),
                     KEY idx_msg_records_scope_id (会话标识(64), 消息类型, appid(32), id),
+                    KEY idx_msg_records_scope_recalled (会话标识(64), 消息类型, appid(32), recalled, id),
                     KEY idx_msg_records_member_time (会话标识(64), user_id(64), ts, id),
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
                     KEY idx_msg_records_scope_refidx (会话标识(32), 消息类型, appid(16), refidx(64), id),
@@ -816,6 +817,15 @@ def _初始化数据库结构() -> bool:
                 if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
                     游标.execute(f"ALTER TABLE `{消息记录表名}` ADD KEY idx_msg_records_scope_id "
                                "(会话标识(64), 消息类型, appid(32), id)")
+                初始化阶段 = "检查索引_idx_msg_records_scope_recalled"
+                游标.execute(
+                    "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s",
+                    (消息记录表名, "idx_msg_records_scope_recalled"),
+                )
+                if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+                    游标.execute(f"ALTER TABLE `{消息记录表名}` ADD KEY idx_msg_records_scope_recalled "
+                               "(会话标识(64), 消息类型, appid(32), recalled, id)")
                 初始化阶段 = "检查索引_idx_msg_records_scope_refidx"
                 游标.execute(
                     "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
@@ -1915,9 +1925,9 @@ def 批量读取引用消息(
 
 def 读取引用定位窗口(
     会话标识: str, 会话类型: str, appid: str, 上限: int = 100,
-    引用标识: str = "", before_id: int = 0, after_id: int = 0,
+    引用标识: str = "", before_id: int = 0, after_id: int = 0, *, 仅撤回: bool = False,
 ) -> dict[str, Any] | None:
-    """按完整作用域定位原消息及相邻页；空结果不回退到其它会话或应用。"""
+    """按完整作用域定位原消息及相邻页，或读取已撤回消息；不回退其它会话。"""
     if not _MySQL可用():
         return None
     上限 = max(1, min(100, int(上限)))
@@ -1934,14 +1944,24 @@ def 读取引用定位窗口(
         "AND BINARY appid=BINARY %s"
     )
     参数 = (会话标识, 会话类型, appid, 会话标识, 会话类型, appid)
+    if 仅撤回:
+        作用域 += " AND recalled=1"
+        来源占位 = ",".join("%s" for _ in 本地系统消息来源)
+        作用域 += f" AND COALESCE(source,'') NOT IN ({来源占位})"
+        参数 += 本地系统消息来源
+        for 前缀 in 本地系统消息编号前缀:
+            作用域 += " AND COALESCE(message_id,'') NOT LIKE %s"
+            参数 += (前缀 + "%",)
     try:
         with 连接.cursor() as 游标:
             def 读取邻页(边界: int, 方向: str, 数量: int) -> list[dict[str, Any]]:
                 比较符, 排序 = ("<", "DESC") if 方向 == "before" else (">", "ASC")
+                边界条件 = f" AND id {比较符} %s" if 边界 else ""
+                邻页参数 = (*参数, 边界, 数量) if 边界 else (*参数, 数量)
                 游标.execute(
                     f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` "
-                    f"WHERE {作用域} AND id {比较符} %s ORDER BY id {排序} LIMIT %s",
-                    (*参数, 边界, 数量),
+                    f"WHERE {作用域}{边界条件} ORDER BY id {排序} LIMIT %s",
+                    邻页参数,
                 )
                 return [_行转记录(行) for 行 in (游标.fetchall() or [])]
 
@@ -1981,6 +2001,10 @@ def 读取引用定位窗口(
                 之后 = 读取邻页(目标["id"], "after", 后数 + 1)
                 记录列表 = list(reversed(之前[:前数])) + [目标] + 之后[:后数]
                 有更早, 有更新 = len(之前) > 前数, len(之后) > 后数
+            elif 仅撤回 and not before_id and not after_id:
+                记录列表 = 读取邻页(0, "before", 上限 + 1)
+                有更早, 有更新 = len(记录列表) > 上限, False
+                记录列表 = list(reversed(记录列表[:上限]))
             else:
                 if not before_id and not after_id:
                     raise ValueError("missing history window cursor")

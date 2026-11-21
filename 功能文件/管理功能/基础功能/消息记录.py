@@ -8499,18 +8499,99 @@ def _数据库历史消息(
         return None
 
 
+def _读取撤回历史窗口(
+    会话标识: str, 类型: str, appid: str, limit: int, 会话: dict[str, Any],
+    before_id: int, after_id: int, before_message_id: str, after_message_id: str,
+) -> dict[str, Any] | None:
+    # 先筛热点记录与数据库，再合并分页。无数据库主键的热点消息排在持久记录之后。
+    def 数字ID(项: dict[str, Any]) -> int:
+        return max(0, _整数时间戳(项.get("id")))
+
+    def 游标顺序(项: dict[str, Any]) -> tuple[bool, int, tuple[int, int, str]]:
+        序号 = 数字ID(项)
+        return not 序号, 序号, _历史消息排序键(项)
+
+    def 消息编号(项: dict[str, Any]) -> str:
+        return _规范消息ID(项.get("message_id"))
+
+    def 属于会话的撤回消息(项: dict[str, Any]) -> bool:
+        return (
+            _引用作用域匹配(项, 会话标识, 类型, appid)
+            and 项.get("recalled") in (True, 1, "1", "true", "True")
+            and not 是本地系统消息(项.get("message_id"), 项.get("source"))
+        )
+
+    热点 = [
+        dict(项) for 项 in list(会话.get("messages") or [])[-每会话缓存消息数:]
+        if 属于会话的撤回消息(项)
+    ]
+    热点.sort(key=游标顺序)
+    内存游标 = before_message_id or after_message_id
+    仅内存 = False
+    排除编号: set[str] = set()
+    反向有热点 = False
+    if 内存游标:
+        位置列表 = [序号 for 序号, 项 in enumerate(热点) if 消息编号(项) == 内存游标]
+        if len(位置列表) != 1:
+            return None
+        位置 = 位置列表[0]
+        目标ID = 数字ID(热点[位置])
+        if 目标ID:
+            if before_message_id:
+                before_id = 目标ID
+            else:
+                after_id = 目标ID
+        elif before_message_id:
+            排除编号 = {消息编号(项) for 项 in 热点[位置:]}
+            反向有热点 = True
+            热点 = 热点[:位置]
+        else:
+            仅内存 = True
+            反向有热点 = True
+            热点 = 热点[位置 + 1:]
+
+    if before_id:
+        反向有热点 = any(数字ID(项) == 0 or 数字ID(项) >= before_id for 项 in 热点)
+        热点 = [项 for 项 in 热点 if 0 < 数字ID(项) < before_id]
+    elif after_id:
+        反向有热点 = any(0 < 数字ID(项) <= after_id for 项 in 热点)
+        热点 = [项 for 项 in 热点 if 数字ID(项) == 0 or 数字ID(项) > after_id]
+
+    读取 = getattr(_消息存储, "读取引用定位窗口", None)
+    库页 = (
+        读取(会话标识, 类型, appid, limit, "", before_id, after_id, 仅撤回=True)
+        if not 仅内存 and callable(读取) else None
+    ) or {}
+    库记录 = [
+        项 for 项 in 库页.get("messages") or []
+        if 属于会话的撤回消息(项) and 消息编号(项) not in 排除编号
+    ]
+    合并 = _去重消息列表(库记录 + 热点)
+    合并.sort(key=游标顺序)
+    向后 = bool(after_id or after_message_id)
+    更多 = len(合并) > limit
+    页 = 合并[:limit] if 向后 else 合并[-limit:]
+    return {
+        "messages": 页,
+        "has_more": bool(库页.get("has_more") or (反向有热点 if 向后 else 更多)),
+        "has_newer": bool(库页.get("has_newer") or (更多 if 向后 else 反向有热点)),
+    }
+
+
 def 获取引用定位历史(
     会话标识: str, 类型: str, appid: str, limit: int = 100,
     引用标识: str = "", before_id: int = 0, after_id: int = 0,
-    before_message_id: str = "", after_message_id: str = "",
+    before_message_id: str = "", after_message_id: str = "", *, 仅撤回: bool = False,
 ) -> dict[str, Any] | None:
-    """按游标读取独立历史窗口，也用于引用跳转。"""
+    """按游标读取独立历史窗口，也用于引用跳转与撤回消息筛选。"""
     会话标识, 类型, appid = str(会话标识 or "").strip(), str(类型 or "").strip(), str(appid or "").strip()
     limit = max(1, min(100, int(limit)))
     内存游标 = before_message_id or after_message_id
+    游标个数 = sum(map(bool, (引用标识, before_id, after_id, before_message_id, after_message_id)))
     if (
         not 会话标识 or 类型 not in {"group", "user"}
-        or sum(map(bool, (引用标识, before_id, after_id, before_message_id, after_message_id))) != 1
+        or (仅撤回 and (引用标识 or not appid or 游标个数 > 1))
+        or (not 仅撤回 and 游标个数 != 1)
         or (内存游标 and not appid)
     ):
         raise ValueError("invalid history window")
@@ -8521,12 +8602,22 @@ def 获取引用定位历史(
             return 0
 
     读取 = getattr(_消息存储, "读取引用定位窗口", None)
-    窗口 = 读取(会话标识, 类型, appid, limit, 引用标识, before_id, after_id) if not 内存游标 and callable(读取) else None
+    窗口 = (
+        读取(会话标识, 类型, appid, limit, 引用标识, before_id, after_id)
+        if not 仅撤回 and not 内存游标 and callable(读取) else None
+    )
     if 窗口 and 窗口.get("failure") == "conflict":
         return None
     会话 = _读取作用域会话缓存(会话标识, 类型, appid)
     缓存作用域匹配 = str(会话.get("chat_type") or "") == 类型 and str(会话.get("appid") or "").strip() == appid
-    if 内存游标:
+    if 仅撤回:
+        窗口 = _读取撤回历史窗口(
+            会话标识, 类型, appid, limit, 会话 if 缓存作用域匹配 else {},
+            before_id, after_id, before_message_id, after_message_id,
+        )
+        if 窗口 is None:
+            return None
+    elif 内存游标:
         if not 缓存作用域匹配:
             return None
         缓存消息 = [
@@ -8600,18 +8691,20 @@ def 获取引用定位历史(
             项["content"] = _表情标签规则.sub(lambda 匹配: _解码表情文本(匹配.group(0)), str(项["content"]))
     资料 = _获取消息相关成员资料(会话标识, 返回消息) if 缓存作用域匹配 else {}
     群资料 = 获取缓存的群信息(会话标识, appid) if 类型 == "group" and 缓存作用域匹配 else {}
-    最旧, 最新 = (返回消息[0], 返回消息[-1]) if 返回消息 else ({}, {})
+    游标消息 = (窗口.get("messages") or []) if 仅撤回 else 返回消息
+    最旧, 最新 = (游标消息[0], 游标消息[-1]) if 游标消息 else ({}, {})
 
     return {
         "messages": 返回消息, "references": 引用映射, "member_profiles": 资料,
         "last_msg_id": str(最新.get("message_id") or ""),
         "oldest_date": str(最旧.get("timestamp") or ""),
-        "oldest_id": min((数字ID(项) for 项 in 返回消息 if 数字ID(项)), default=0),
-        "newest_id": max((数字ID(项) for 项 in 返回消息), default=0),
+        "oldest_id": 数字ID(最旧) if 仅撤回 else min((数字ID(项) for 项 in 返回消息 if 数字ID(项)), default=0),
+        "newest_id": 数字ID(最新) if 仅撤回 else max((数字ID(项) for 项 in 返回消息), default=0),
         **({
             "oldest_message_id": str(最旧.get("message_id") or ""),
             "newest_message_id": str(最新.get("message_id") or ""),
-        } if 内存游标 else {}),
+        } if 内存游标 or 仅撤回 else {}),
+        **({"recalled_only": True} if 仅撤回 else {}),
         "has_more": bool(窗口.get("has_more")), "has_newer": bool(窗口.get("has_newer")),
         "located_message_id": str(窗口.get("located_message_id") or ""),
         "located_refidx": str(窗口.get("located_refidx") or ""),
