@@ -2541,7 +2541,7 @@
       const msgHistoryPrefetch = new Map();
       const msgHistoryRetryDelays = [300, 900];
       let msgHistoryEdgeIntent = null;
-      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', recalledOnly:false, grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', recalledOnly:false, grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', composerAttachment:null, mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
         if (!button) return;
@@ -2600,6 +2600,7 @@
         if (!node) return '';
         if (node.nodeType === Node.TEXT_NODE) return String(node.nodeValue || '');
         if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        if (node.dataset?.composerQuote === '1' || node.dataset?.composerAttachment === '1') return '';
         if (node.dataset?.composerMention) {
           const id = String(node.dataset.composerMention);
           return id === 'all' || /^[A-Za-z0-9_-]{5,128}$/.test(id) ? `<@${id}>` : '';
@@ -2639,6 +2640,7 @@
         const range = restoreComposerSelection();
         if (!range) return;
         range.deleteContents();
+        syncComposerDraftItems();
         const text = document.createTextNode(String(value));
         range.insertNode(text);
         range.setStartAfter(text);
@@ -2656,6 +2658,7 @@
         const range = restoreComposerSelection();
         if (!range) return;
         range.deleteContents();
+        syncComposerDraftItems();
         const wrapper = document.createElement('span');
         wrapper.className = 'composer-inline-image';
         wrapper.dataset.composerImage = '1';
@@ -5663,8 +5666,15 @@
         editor.focus();
         const range = quote ? document.createRange() : restoreComposerSelection();
         if (!range) return;
-        if (quote) { range.selectNodeContents(editor); range.collapse(true); }
-        else range.deleteContents();
+        if (quote) {
+          const lastCard = msgState.composerAttachment || msgState.quote?.preview;
+          if (!editor.contains(lastCard)) return;
+          range.setStartAfter(lastCard);
+          range.collapse(true);
+        } else {
+          range.deleteContents();
+          syncComposerDraftItems();
+        }
         const node = document.createElement('span');
         node.className = 'composer-mention';
         node.dataset.composerMention = id;
@@ -5833,22 +5843,102 @@
         }
         return false;
       };
+      const placeCaretAfterComposerCard = (card) => {
+        const editor = getComposerEditor();
+        editor.focus();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        if (card.nextSibling) {
+          range.setStartAfter(card);
+        } else {
+          // A terminal noneditable block needs editable text for Chrome to enter the draft.
+          const space = document.createTextNode('\u00a0');
+          card._composerCaretSpace = space;
+          card.after(space);
+          range.setStart(space, 1);
+        }
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        saveComposerSelection();
+      };
+      const removeComposerCard = (card) => {
+        if (!card) return;
+        const space = card._composerCaretSpace;
+        if (space?.parentNode && space.data.startsWith('\u00a0')) {
+          space.deleteData(0, 1);
+          if (!space.length) space.remove();
+        }
+        card.remove();
+      };
       const clearMsgQuote = () => {
+        removeComposerCard(msgState.quote?.preview);
         removeQuoteMention();
         msgState.quote = null;
-        const preview = $('msg-quote-preview');
-        if (preview) preview.hidden = true;
-        $('msg-quote-text')?.replaceChildren();
+      };
+      const syncComposerDraftItems = () => {
+        const editor = getComposerEditor();
+        if (!editor) return;
+        const quote = msgState.quote?.preview;
+        const attachment = msgState.composerAttachment;
+        if (msgState.quote && !editor.contains(quote)) clearMsgQuote();
+        if (attachment && !editor.contains(attachment)) clearComposerMedia();
+        for (const node of editor.querySelectorAll('[data-composer-quote="1"], [data-composer-attachment="1"]')) {
+          if (node !== quote && node !== attachment) node.remove();
+        }
+      };
+      const deleteComposerCardAtCaret = (forward) => {
+        const editor = getComposerEditor();
+        const selection = window.getSelection();
+        if (!editor || !selection?.rangeCount) return false;
+        const range = selection.getRangeAt(0);
+        if (!range.collapsed) {
+          if (range.startContainer !== editor || range.startOffset !== 0
+            || range.endContainer !== editor || range.endOffset !== editor.childNodes.length) return false;
+          editor.replaceChildren();
+          syncComposerDraftItems();
+          syncComposerImageState();
+          saveComposerSelection();
+          return true;
+        }
+        const {startContainer, startOffset} = range;
+        if (!editor.contains(startContainer) || (!forward && startContainer.nodeType === Node.TEXT_NODE && startOffset > 1)) return false;
+        const items = [
+          [msgState.composerAttachment, clearComposerMedia],
+          [msgState.quote?.preview, clearMsgQuote],
+        ];
+        for (const [card, remove] of items) {
+          if (!card || !editor.contains(card)) continue;
+          if (forward) {
+            if (startContainer !== card.parentNode || startContainer.childNodes[startOffset] !== card) continue;
+          } else {
+            const prefix = document.createRange();
+            prefix.setStartAfter(card);
+            prefix.collapse(true);
+            if (prefix.comparePoint(startContainer, startOffset) < 0) continue;
+            prefix.setEnd(startContainer, startOffset);
+            const fragment = prefix.cloneContents();
+            const mention = fragment.querySelector('[data-composer-quote-mention="1"]');
+            mention?.remove();
+            const atCaretSpace = startContainer === card._composerCaretSpace && startOffset === 1;
+            if (fragment.querySelector('br, [contenteditable="false"]')
+              || (fragment.textContent !== '' && !((mention || atCaretSpace) && fragment.textContent === '\u00a0'))) continue;
+          }
+          remove();
+          saveComposerSelection();
+          return true;
+        }
+        return false;
       };
       const renderMsgQuotePreview = () => {
-        const preview = $('msg-quote-preview');
-        const previewText = $('msg-quote-text');
         const quote = msgState.quote;
-        if (!preview || !previewText) return;
-        if (!quote || quote.chatId !== msgState.chatId || quote.chatType !== msgState.chatType || (quote.appid && quote.appid !== String(msgState.chatAppid || ''))) {
-          preview.hidden = true;
+        if (!quote) return;
+        if (!getComposerEditor()?.contains(quote.preview)
+          || quote.chatId !== msgState.chatId || quote.chatType !== msgState.chatType || quote.appid !== msgState.chatAppid) {
+          clearMsgQuote();
           return;
         }
+        const previewText = quote.preview.querySelector('#msg-quote-text');
         const index = buildMsgReferenceIndex(msgState.historyData?.messages || msgState.messages, {}, msgState.profiles);
         const summary = index.get(quote.id) || msgQuoteSummary({user_id:quote.userId, nickname:quote.name, nickname_blank:quote.nickname_blank, content:quote.text}, msgState.profiles);
         quote.name = summary.nickname;
@@ -5856,27 +5946,30 @@
         quote.text = summary.content;
         const excerpt = esc(plainMsgPreview(summary.content) || '（空消息）');
         previewText.innerHTML = `<span class="msg-quote-name">${esc(summary.nickname)}</span><span class="msg-quote-content" title="${excerpt}">${excerpt}</span>`;
-        preview.hidden = false;
         getComposerEditor()?.querySelectorAll('[data-composer-quote-mention="1"]').forEach((node) => {
           node.textContent = `@${summary.nickname}`;
         });
       };
       const setMsgQuote = (messageId, userId, nickname, quotedText = '', refidx = '') => {
         const id = String(messageId || '').trim();
-        if (!id) return;
+        const editor = getComposerEditor();
+        const preview = $('msg-quote-template')?.content.firstElementChild?.cloneNode(true);
+        if (!id || !editor || !preview) return;
         const uid = String(userId || '').trim();
         const index = buildMsgReferenceIndex([...(msgState.historyData?.messages || []), ...msgState.messages], {}, msgState.profiles);
         const summary = index.get(id) || msgQuoteSummary({user_id:uid, nickname, content:quotedText}, msgState.profiles);
-        removeQuoteMention();
-        msgState.quote = {id, refidx:String(refidx || summary.refidx || '').trim(), userId:uid || summary.user_id, name:summary.nickname, nickname_blank:summary.nickname_blank, text:summary.content, chatId:msgState.chatId, chatType:msgState.chatType, appid:String(msgState.chatAppid || '')};
+        clearMsgQuote();
+        editor.prepend(preview);
+        msgState.quote = {id, refidx:String(refidx || summary.refidx || '').trim(), userId:uid || summary.user_id, name:summary.nickname, nickname_blank:summary.nickname_blank, text:summary.content, chatId:msgState.chatId, chatType:msgState.chatType, appid:String(msgState.chatAppid || ''), preview};
         renderMsgQuotePreview();
         if (msgState.quote.userId && msgState.chatType === 'group') {
           msgState.sendType = 'markdown';
           $('msg-composer-tabs')?.querySelectorAll('[data-msg-type]').forEach((x) => x.classList.toggle('active', x.dataset.msgType === 'markdown'));
           renderMsgExtra();
           insertComposerMention(msgState.quote.userId, summary.nickname, true);
+        } else {
+          placeCaretAfterComposerCard(msgState.composerAttachment || preview);
         }
-        getComposerEditor()?.focus();
       };
       const copyMsgText = async (text, row = null, {exact = false, notify = true} = {}) => {
         let copyText = String(text ?? '');
@@ -6339,8 +6432,6 @@
         $('msg-input-box')?.classList.remove('has-inline-image');
         const file = $('msg-img-file');
         if (file) file.value = '';
-        const quote = $('msg-quote-preview');
-        if (quote) quote.hidden = true;
       };
       const finishOptimisticSend = async (entry) => {
         try {
@@ -6924,32 +7015,35 @@
         return true;
       };
       const setComposerMedia = (data, name, fileType, mime = '', file = null) => {
+        const editor = getComposerEditor();
+        const attachment = $('msg-media-template')?.content.firstElementChild?.cloneNode(true);
+        if (!editor || !attachment) return;
         closeComposerMentionPicker();
         clearMsgImage();
+        clearComposerMedia();
         msgState.mediaData = String(data || '');
         msgState.mediaFile = file && typeof File !== 'undefined' && file instanceof File ? file : null;
         msgState.mediaName = String(name || '附件文件').trim() || '附件文件';
         msgState.mediaType = Number(fileType || 4) === 2 ? 2 : 4;
         msgState.mediaMime = String(mime || '').trim();
         // 附件类型由发送时的 hasMedia 决定，保留原文字模式供移除或发送后继续使用。
-        const inline = $('msg-media-inline');
-        const label = $('msg-media-name');
-        const icon = $('msg-media-icon');
-        if (label) label.textContent = msgState.mediaName;
-        if (icon) icon.textContent = msgState.mediaType === 2 ? '▶' : '□';
-        if (inline) inline.hidden = false;
-        getComposerEditor()?.focus();
+        attachment.querySelector('#msg-media-name').textContent = msgState.mediaName;
+        attachment.querySelector('#msg-media-icon').textContent = msgState.mediaType === 2 ? '▶' : '□';
+        const preview = msgState.quote?.preview;
+        if (editor.contains(preview)) preview.after(attachment);
+        else editor.prepend(attachment);
+        msgState.composerAttachment = attachment;
+        if (!getComposerText().trim()) placeCaretAfterComposerCard(attachment);
+        else editor.focus();
       };
       const clearComposerMedia = () => {
+        removeComposerCard(msgState.composerAttachment);
+        msgState.composerAttachment = null;
         msgState.mediaData = null;
         msgState.mediaFile = null;
         msgState.mediaName = '';
         msgState.mediaType = 0;
         msgState.mediaMime = '';
-        const inline = $('msg-media-inline');
-        if (inline) inline.hidden = true;
-        const label = $('msg-media-name');
-        if (label) label.textContent = '待发送附件';
         const input = $('msg-attachment-file');
         const video = $('msg-video-file');
         if (input) input.value = '';
@@ -9092,6 +9186,8 @@
         if (msgState.chatRemoved) return toast(msgChatRemovedText({
           ...(msgState.groupMembership.get(msgScopeKey('group', msgState.chatId, msgState.chatAppid)) || {}), chat_type:msgState.chatType,
         }));
+        syncComposerDraftItems();
+        syncComposerImageState();
         const hasImage = composerHasImage();
         const hasMedia = composerHasMedia();
         const editorText = getComposerText();
@@ -9219,6 +9315,24 @@
       $('msg-send').addEventListener('click', sendMessage);
       const handleComposerKeydown = (e) => {
         if (handleComposerMentionKeydown(e)) return;
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.isComposing
+          && !composerMentionPicker.composing && e.key.toLowerCase() === 'a' && e.target === getComposerEditor()
+          && (msgState.quote || msgState.composerAttachment)) {
+          e.preventDefault();
+          const range = document.createRange();
+          range.selectNodeContents(e.target);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          saveComposerSelection();
+          return;
+        }
+        if (!e.isComposing && !composerMentionPicker.composing && e.keyCode !== 229
+          && !e.ctrlKey && !e.metaKey && !e.altKey && ['Backspace', 'Delete'].includes(e.key)
+          && deleteComposerCardAtCaret(e.key === 'Delete')) {
+          e.preventDefault();
+          return;
+        }
         if (e.key === 'Enter' && e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && !composerMentionPicker.composing && e.keyCode !== 229) {
           e.preventDefault();
           document.execCommand('insertLineBreak');
@@ -9234,7 +9348,24 @@
         node.addEventListener('keydown', handleComposerKeydown);
         node.addEventListener('keyup', () => { saveComposerSelection(); scheduleComposerMentionPicker(); });
         node.addEventListener('mouseup', () => { saveComposerSelection(); scheduleComposerMentionPicker(); });
-        node.addEventListener('input', () => { syncComposerImageState(); saveComposerSelection(); scheduleComposerMentionPicker(); });
+        node.addEventListener('beforeinput', (event) => {
+          if (event.cancelable && !event.isComposing && !composerMentionPicker.composing
+            && ['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)
+            && deleteComposerCardAtCaret(event.inputType === 'deleteContentForward')) event.preventDefault();
+        });
+        node.addEventListener('input', () => {
+          syncComposerDraftItems();
+          syncComposerImageState();
+          saveComposerSelection();
+          scheduleComposerMentionPicker();
+        });
+        node.addEventListener('click', (event) => {
+          if (msgState.quote?.preview?.contains(event.target) && event.target.closest('#msg-quote-clear')) clearMsgQuote();
+          else if (msgState.composerAttachment?.contains(event.target) && event.target.closest('#msg-media-clear')) clearComposerMedia();
+          else return;
+          getComposerEditor()?.focus({preventScroll:true});
+          saveComposerSelection();
+        });
         node.addEventListener('compositionstart', () => { composerMentionPicker.composing = true; closeComposerMentionPicker(); });
         node.addEventListener('compositionend', () => { composerMentionPicker.composing = false; saveComposerSelection(); scheduleComposerMentionPicker(); });
         node.addEventListener('blur', () => closeComposerMentionPicker());
@@ -9357,7 +9488,6 @@
         const file = e.target.files && e.target.files[0];
         readComposerMediaFile(file, 4);
       });
-      $('msg-media-clear').addEventListener('click', clearComposerMedia);
       const measureMsgHistoryViewport = (body) => {
         const heights = new Map();
         const visible = new Set();
@@ -9654,10 +9784,6 @@
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
       bindGroupSettings();
-      $('msg-quote-clear').addEventListener('click', () => {
-        clearMsgQuote();
-        getComposerEditor()?.focus({preventScroll:true});
-      });
       $('msg-raw-copy').addEventListener('click', async () => {
         const button = $('msg-raw-copy');
         const content = $('msg-raw-content').textContent || '';

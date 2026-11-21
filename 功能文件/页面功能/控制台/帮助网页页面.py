@@ -145,14 +145,21 @@ from .帮助网页脚本 import 控制台脚本
                   <button type="button" data-msg-type="card">图文卡片</button>
                 </div>
                 <div class="msg-input-box" id="msg-input-box">
-                  <div class="msg-quote-preview msg-composer-quote" id="msg-quote-preview" hidden><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button" title="取消引用" aria-label="取消引用">×</button></div>
-                  <div class="msg-attachment-inline" id="msg-media-inline" hidden>
+                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="msg-mention-picker" aria-expanded="false" data-placeholder="输入消息..." aria-label="消息内容"></div>
+                </div>
+                <template id="msg-quote-template">
+                  <div class="msg-quote-preview msg-composer-quote" id="msg-quote-preview" data-composer-quote="1" contenteditable="false">
+                    <span class="msg-quote-text" id="msg-quote-text"></span>
+                    <button class="msg-action" id="msg-quote-clear" type="button" title="取消引用" aria-label="取消引用">×</button>
+                  </div>
+                </template>
+                <template id="msg-media-template">
+                  <div class="msg-attachment-inline" id="msg-media-inline" data-composer-attachment="1" contenteditable="false">
                     <span class="msg-attachment-icon" id="msg-media-icon" aria-hidden="true">□</span>
                     <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>
                     <button class="msg-img-remove" id="msg-media-clear" type="button" aria-label="移除附件">×</button>
                   </div>
-                  <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="msg-mention-picker" aria-expanded="false" data-placeholder="输入消息..." aria-label="消息内容"></div>
-                </div>
+                </template>
                 <div class="msg-toolbar">
                   <button class="msg-btn primary" id="msg-send" type="button" title="Enter 发送 · Ctrl+Enter 换行">发送</button>
                 </div>

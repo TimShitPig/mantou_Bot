@@ -123,7 +123,6 @@ from .总览外观 import 总览外观
     }
     :root body.messages-workspace .msg-quote-jump:hover { background:var(--hover); }
     :root body.messages-workspace .msg-row.self .msg-bubble .msg-quote-jump:hover { background:var(--msg-self-inset-hover); }
-    :root body.messages-workspace .msg-quote-preview { border-color:var(--msg-quote-line); }
     :root body.messages-workspace .msg-mention-chip,
     :root body.messages-workspace .msg-group-role {
       background:var(--primary-soft);
