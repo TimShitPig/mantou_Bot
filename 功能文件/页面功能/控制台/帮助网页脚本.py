@@ -3565,16 +3565,17 @@
         // 接口接受该 OpenID，不能先按 QQ 号数字格式过滤。
         return /^\d{4,32}$/.test(aid) ? `https://q.qlogo.cn/qqapp/${encodeURIComponent(aid)}/${encodeURIComponent(id)}/0` : '';
       };
-      const avatarImg = (url, letter, className = '', appid = consoleAppid) => {
-        const source = mediaProxyUrl(url, 'image', '', appid);
+      const avatarImg = (url, letter, className = '', appid = consoleAppid, defer = false) => {
+        const source = mediaProxyUrl(url, 'avatar', '', appid);
         const nonce = Number(msgState.avatarRefresh?.get(String(url)) || 0);
         const refreshed = nonce && source.startsWith('/api/') ? source + '&avatar_refresh=' + nonce : source;
-        return `<img class="${esc(className)}" src="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}const box=this.closest('.msg-chat-avatar, .msg-avatar, .msg-mention-avatar, .bot-selector-avatar, .bot-avatar');box?.classList.add('avatar-fallback');box?.classList.remove('has-image');this.remove();">`;
+        const sourceAttribute = defer ? 'data-avatar-list-src' : 'src';
+        return `<img class="${esc(className)}" ${sourceAttribute}="${esc(refreshed)}" data-avatar-direct="${esc(url)}" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onerror="if(this.dataset.avatarRetried!=='1' && this.getAttribute('src')!==this.dataset.avatarDirect){this.dataset.avatarRetried='1';this.src=this.dataset.avatarDirect;return;}const box=this.closest('.msg-chat-avatar, .msg-avatar, .msg-mention-avatar, .bot-selector-avatar, .bot-avatar');box?.classList.add('avatar-fallback');box?.classList.remove('has-image');if(this.dataset.avatarListSrc)this.hidden=true;else this.remove();">`;
       };
-      const avatarHtml = (url, letter, appid = consoleAppid) => {
+      const avatarHtml = (url, letter, appid = consoleAppid, defer = false) => {
         const firstLetter = Array.from(String(letter || '?'))[0];
         if (!url) return esc(firstLetter);
-        return `<span class="avatar-letter">${esc(firstLetter)}</span>` + avatarImg(url, letter, '', appid);
+        return `<span class="avatar-letter">${esc(firstLetter)}</span>` + avatarImg(url, letter, '', appid, defer);
       };
       const botProfileForAppid = (appid) => {
         const id = String(appid || '').trim();
@@ -3583,6 +3584,8 @@
       const switchMsgBotScope = (appid) => {
         const next = /^\d{4,32}$/.test(String(appid || '').trim()) ? String(appid).trim() : '';
         if (next === msgState.selectedAppid) return;
+        msgChatAvatarObserver?.disconnect();
+        dropMsgOpeningPrefetch();
         discardMsgHistoryPrefetch();
         closeMsgHeadMenu(); closeAdminPopover();
         msgState.scopeGeneration += 1;
@@ -4320,13 +4323,25 @@
         const value = Number.parseFloat(window.getComputedStyle(node).getPropertyValue('--msg-chat-row-height'));
         return Number.isFinite(value) && value > 0 ? value : 52;
       };
+      const msgChatAvatarObserver = typeof IntersectionObserver === 'function'
+        ? new IntersectionObserver((entries, observer) => {
+          for (const entry of entries) {
+            const image = entry.target;
+            if (!entry.isIntersecting || !image.isConnected || image.hasAttribute('src')
+              || image.closest('[data-msg-appid]')?.dataset.msgAppid !== msgState.selectedAppid) continue;
+            observer.unobserve(image);
+            image.loading = 'eager';
+            image.src = image.dataset.avatarListSrc;
+          }
+        }, {root:$('msg-chats'), rootMargin:'96px 0px'})
+        : null;
       const renderMsgChatRow = (item, top) => {
         const placement = `position:absolute;top:${top}px;left:0;right:0;height:${item.height}px;`;
         if (item.kind === 'folder') {
           const collapsed = Boolean(msgState.folderCollapsed[item.type]);
-          return `<button class="msg-chat-folder" style="${placement}" type="button" data-msg-folder-toggle="${item.type}" aria-expanded="${!collapsed}"><span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></button>`;
+          return `<button class="msg-chat-folder" style="${placement}" type="button" data-msg-folder-toggle="${item.type}" data-msg-list-render-key="folder:${item.type}" aria-expanded="${!collapsed}"><span class="msg-chat-folder-caret" aria-hidden="true"></span><strong>${item.label}</strong><small>${item.count}</small></button>`;
         }
-        if (item.kind === 'divider') return `<div class="msg-chat-divider" style="${placement}" role="separator">${item.type === 'user' ? '已删除好友' : '已移除群聊'}</div>`;
+        if (item.kind === 'divider') return `<div class="msg-chat-divider" style="${placement}" data-msg-list-render-key="divider:${item.type}" role="separator">${item.type === 'user' ? '已删除好友' : '已移除群聊'}</div>`;
         const chat = item.chat;
         const avatarSource = chat.chat_type === 'group'
           ? (chat.group_avatar || chat.group_avatar_url || '')
@@ -4341,8 +4356,8 @@
         if (viewingAtBottom && Number(chat.unread || 0) > 0) queueMicrotask(() => markMsgRead(chat.chat_id, false, chat.chat_type, chat.appid));
         const removedText = msgChatRemovedText(chat);
         const preview = removed ? removedText : (item.preview || '（无文本内容）');
-        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-appid="${esc(chat.appid)}" data-msg-key="${esc(msgChatKey(chat))}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? removedText : (chat.pinned ? '取消置顶' : '置顶')}">
-          <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群')}</span>
+        return `<button type="button" class="msg-chat ${chat.pinned ? 'pinned' : ''} ${viewing ? 'active' : ''}${removed ? ' removed' : ''}" style="${placement}" data-msg-chat="${esc(chat.chat_id)}" data-msg-type="${esc(chat.chat_type)}" data-msg-appid="${esc(chat.appid)}" data-msg-key="${esc(msgChatKey(chat))}" data-msg-list-render-key="chat:${esc(msgChatKey(chat))}" data-msg-pinned="${chat.pinned ? '1' : '0'}" data-msg-removed="${removed ? '1' : '0'}" title="${removed ? removedText : (chat.pinned ? '取消置顶' : '置顶')}">
+          <span class="msg-chat-avatar">${avatarHtml(av, chat.nickname || '群', chat.appid, Boolean(msgChatAvatarObserver))}</span>
           <span class="msg-chat-main"><span class="msg-chat-top"><strong class="${chat.is_admin ? 'admin' : ''}">${esc(chat.nickname || chat.chat_id)}</strong>${typeTag}<small>${esc(fmtChatTime(chat.last_time))}</small></span>
           <span class="msg-chat-sub-row"><span class="msg-chat-sub">${esc(preview)}</span>${unread > 0 ? `<span class="msg-chat-badge">${unread}</span>` : ''}</span>
           <span class="msg-chat-meta">${chat.chat_type === 'group' ? `群消息 ${chat.msg_count} 条` : `私聊消息 ${chat.msg_count} 条`}${chat.remark ? ' · 已备注' : ''}</span></span>
@@ -4384,7 +4399,18 @@
         const visibleRows = rows.slice(start, end)
           .map((row, index) => renderMsgChatRow(row, offsets[start + index] || 0))
           .join('');
-        track.innerHTML = visibleRows;
+        const template = document.createElement('template');
+        template.innerHTML = visibleRows;
+        const retained = new Set(Array.from(template.content.children, (row) => row.dataset.msgListRenderKey));
+        [...track.children].forEach((row) => {
+          if (!retained.has(row.dataset.msgListRenderKey)) row.remove();
+        });
+        reconcileMsgDomChildren(track, template.content);
+        if (msgChatAvatarObserver) {
+          msgChatAvatarObserver.disconnect();
+          track.querySelectorAll('img[data-avatar-list-src]:not([src])')
+            .forEach((image) => msgChatAvatarObserver.observe(image));
+        }
         msgState.chatListWindowStart = start;
         msgState.chatListWindowEnd = end;
       };
@@ -4516,6 +4542,7 @@
         msgState.chatRenderSignature = chatRenderSignature;
         msgState.chatListRendered = true;
         if (!visibleChats.length) {
+          msgChatAvatarObserver?.disconnect();
           msgState.chatListRows = [];
           msgState.chatListOffsets = [0];
           msgState.chatListContentHeight = 0;
@@ -4567,6 +4594,29 @@
         scheduleAutoScanAdminGroups();
         if (node.dataset.msgDelegated !== '1') {
           node.dataset.msgDelegated = '1';
+          const chatRowFor = (event) => {
+            const row = event.target.closest?.('[data-msg-chat]');
+            return row && node.contains(row) ? row : null;
+          };
+          node.addEventListener('pointerover', (event) => {
+            const row = chatRowFor(event);
+            if (row && event.pointerType !== 'touch' && event.relatedTarget?.closest?.('[data-msg-chat]') !== row) {
+              queueMsgOpeningPrefetch(row);
+            }
+          }, {passive:true});
+          node.addEventListener('pointerout', (event) => {
+            const row = chatRowFor(event);
+            if (row && event.relatedTarget?.closest?.('[data-msg-chat]') !== row) stopMsgOpeningIntent(row);
+          }, {passive:true});
+          node.addEventListener('focusin', (event) => {
+            const row = chatRowFor(event);
+            if (row) queueMsgOpeningPrefetch(row);
+          });
+          node.addEventListener('pointerdown', (event) => {
+            const row = chatRowFor(event);
+            if (row && event.pointerType === 'touch' && event.isPrimary) queueMsgOpeningPrefetch(row);
+          }, {passive:true});
+          node.addEventListener('pointercancel', () => stopMsgOpeningIntent(), {passive:true});
           node.addEventListener('contextmenu', (e) => {
             const el = e.target.closest?.('[data-msg-chat]');
             if (!el || !node.contains(el)) return;
@@ -4804,6 +4854,7 @@
         return requestPromise;
       };
       const closeMsgEvents = () => {
+        dropMsgOpeningPrefetch();
         discardMsgHistoryPrefetch();
         cancelMsgQuoteJump(true);
         stopMsgGroupSnapshots();
@@ -4946,6 +4997,7 @@
         const key = JSON.stringify([boundary.appid, scope, scope === 'chat' ? boundary.chat_type : '', scope === 'chat' ? boundary.chat_id : '', String(boundary.origin || '')]);
         const previous = msgHistoryClearBoundaries.get(key);
         if (previous && Number(previous.cutoff_id || 0) >= Number(boundary.cutoff_id || 0) && Number(previous.cutoff_order || 0) >= Number(boundary.cutoff_order || 0)) return false;
+        dropMsgOpeningPrefetch();
         msgHistoryClearBoundaries.set(key, {...boundary, cutoff_id:Math.max(Number(previous?.cutoff_id || 0), Number(boundary.cutoff_id || 0)), cutoff_order:Math.max(Number(previous?.cutoff_order || 0), Number(boundary.cutoff_order || 0))});
         setMsgModal('msg-clear-modal', false);
         const affects = (type, id, appid) => msgClearScopeMatches(boundary, type, id, appid);
@@ -6682,7 +6734,7 @@
           const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qlogo.cn', 'qq.com.cn', 'qq.com'];
           const shouldProxy = allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
           if (!shouldProxy) return direct;
-          const query = new URLSearchParams({src: direct, mode: mode === 'image' ? 'image' : 'file'});
+          const query = new URLSearchParams({src: direct, mode: ['image', 'avatar'].includes(mode) ? mode : 'file'});
           if (/^\d{4,32}$/.test(String(appid || ''))) query.set('appid', appid);
           // 新版本绕过浏览器中旧版 200 占位响应，仍由服务端按 src 统一处理失败冷却。
           query.set('v', messageMediaProxyRevision);
@@ -7258,6 +7310,10 @@
       const msgDomSignatures = new WeakMap();
       const msgDomKey = (node) => {
         if (node.nodeType !== 1) return `node:${node.nodeType}`;
+        const listKey = node.getAttribute('data-msg-list-render-key');
+        if (listKey !== null) return 'chat-list:' + listKey;
+        const avatarKey = node.getAttribute('data-avatar-list-src');
+        if (avatarKey !== null) return 'chat-avatar:' + avatarKey;
         const messageKey = node.getAttribute('data-msg-render-key');
         if (messageKey !== null) return messageKey ? `message:${messageKey}` : null;
         const mediaKey = node.getAttribute('data-msg-media-key');
@@ -7273,6 +7329,8 @@
       const patchMsgDomNode = (current, incoming) => {
         const signature = incoming.nodeType === 1 ? incoming.outerHTML : incoming.nodeValue;
         if (msgDomSignatures.get(current) === signature) return current;
+        if (incoming.nodeType === 1 && incoming.hasAttribute('data-avatar-list-src')
+          && current.dataset.avatarListSrc === incoming.dataset.avatarListSrc) return current;
         const mediaKey = incoming.nodeType === 1 ? incoming.getAttribute('data-msg-media-key') : null;
         if (mediaKey !== null && current.getAttribute('data-msg-media-key') === mediaKey) {
           const existingMedia = [...current.querySelectorAll('[data-media-img], video, audio')];
@@ -7834,6 +7892,7 @@
           && (!currentAppid || currentAppid === eventAppid);
         // 实时事件不能改变当前选中的机器人身份。
         const messageKey = msgMessageKey(message);
+        dropMsgOpeningPrefetch(chatKey);
         if (msgIsRecalled(message)) {
           msgState.historyCache.delete(chatKey);
           if ([...msgHistoryPrefetch.values()].some((entry) => entry.scope === chatKey)) discardMsgHistoryPrefetch();
@@ -8029,14 +8088,69 @@
         for (const entry of msgHistoryPrefetch.values()) entry.controller.abort();
         msgHistoryPrefetch.clear();
       };
-      const requestMsgHistoryPage = (chatId, chatType, appid, beforeId, beforeKey, limit, signal) => api('message/history', {
+      const requestMsgHistoryPage = (chatId, chatType, appid, beforeId, beforeKey, limit, signal, recalledOnly = msgState.recalledOnly) => api('message/history', {
         method:'POST', body:JSON.stringify({
           chat_id:chatId, chat_type:chatType, appid, before_id:beforeId, limit,
-          ...(msgState.recalledOnly
+          ...(recalledOnly
             ? {recalled_only:true, history_window:true, ...(!beforeId && beforeKey ? {before_message_id:beforeKey} : {})}
             : {before_date:beforeId ? '' : beforeKey}),
         }), signal,
       });
+      // One short-lived first page, separate from the active chat's scroll prefetch.
+      const msgOpeningPrefetch = {pending:null, entry:null};
+      const stopMsgOpeningIntent = (row = null) => {
+        const pending = msgOpeningPrefetch.pending;
+        if (!pending || (row && pending.row !== row)) return;
+        clearTimeout(pending.timer);
+        msgOpeningPrefetch.pending = null;
+      };
+      const dropMsgOpeningPrefetch = (scope = '') => {
+        if (!scope || msgOpeningPrefetch.pending?.scope === scope) stopMsgOpeningIntent();
+        const entry = msgOpeningPrefetch.entry;
+        if (!entry || (scope && entry.scope !== scope)) return;
+        msgOpeningPrefetch.entry = null;
+        clearTimeout(entry.timer);
+        entry.controller.abort();
+      };
+      const queueMsgOpeningPrefetch = (row) => {
+        const {msgChat:chatId, msgType:chatType, msgAppid:appid} = row.dataset;
+        if (!chatId || !['group', 'user'].includes(chatType) || !appid || appid !== msgState.selectedAppid
+          || msgMatchesCurrent(chatType, chatId, appid) || groupSettingsState.mutating
+          || navigator.connection?.saveData || document.visibilityState === 'hidden'
+          || $('page-messages')?.hidden) return;
+        const scope = msgScopeKey(chatType, chatId, appid);
+        if (msgState.historyCache.get(scope)?.messages?.length || msgOpeningPrefetch.entry?.scope === scope
+          || msgOpeningPrefetch.pending?.scope === scope) return;
+        stopMsgOpeningIntent();
+        const pending = {row, scope, timer:0};
+        pending.timer = setTimeout(() => {
+          msgOpeningPrefetch.pending = null;
+          if (!row.isConnected || appid !== msgState.selectedAppid || msgMatchesCurrent(chatType, chatId, appid)
+            || groupSettingsState.mutating || document.visibilityState === 'hidden' || $('page-messages')?.hidden) return;
+          dropMsgOpeningPrefetch();
+          const controller = new AbortController();
+          const entry = {scope, controller, timer:0, promise:null};
+          entry.timer = setTimeout(() => dropMsgOpeningPrefetch(scope), 8000);
+          msgOpeningPrefetch.entry = entry;
+          entry.promise = requestMsgHistoryPage(chatId, chatType, appid, 0, '', msgHistoryInitialPageSize,
+            controller.signal, false).then((data) => (
+              data.chat_id === chatId && data.chat_type === chatType && String(data.appid || '') === appid
+                && data.recalled_only !== true ? data : null
+            )).catch(() => null);
+        }, 80);
+        msgOpeningPrefetch.pending = pending;
+      };
+      const takeMsgOpeningPrefetch = (scope) => {
+        stopMsgOpeningIntent();
+        const entry = msgOpeningPrefetch.entry;
+        if (!entry || entry.scope !== scope) {
+          dropMsgOpeningPrefetch();
+          return null;
+        }
+        msgOpeningPrefetch.entry = null;
+        clearTimeout(entry.timer);
+        return entry;
+      };
       const msgOlderHistoryKey = (message) => msgState.recalledOnly ? (message?.message_id || '') : (message?.timestamp || '');
       const msgOlderPrefetchKey = (beforeId, beforeKey) => JSON.stringify(['latest', msgState.recalledOnly, beforeId || beforeKey]);
       const currentMsgHistoryPrefetch = (direction, scope, key) => {
@@ -8156,7 +8270,9 @@
         if (previousAbort) previousAbort.abort();
         const before = older ? msgOlderHistoryKey(msgState.messages[0]) : '';
         const beforeId = older ? Number(msgState.messages[0]?.id || 0) : 0;
-        const prefetched = older ? takeMsgHistoryPrefetch('before', requestScope, msgOlderPrefetchKey(beforeId, before)) : null;
+        const smallPage = opening && !older && !quiet && !returningWindow;
+        const prefetched = older ? takeMsgHistoryPrefetch('before', requestScope, msgOlderPrefetchKey(beforeId, before))
+          : smallPage && !msgState.recalledOnly ? takeMsgOpeningPrefetch(requestScope) : null;
         const controller = prefetched?.controller || new AbortController();
         msgState[older ? 'historyOlderAbort' : 'historyAbort'] = controller;
         if (!older) msgState.historyActiveScope = requestScope;
@@ -8177,7 +8293,6 @@
         let loadedPage = false;
         let requesting = true;
         try {
-          const smallPage = opening && !older && !quiet && !returningWindow;
           const historyLimit = older ? olderLimit
             : (smallPage || quiet) ? msgHistoryInitialPageSize : msgHistoryPageSize;
           let data = prefetched ? await prefetched.promise : null;
@@ -9393,6 +9508,7 @@
       window.addEventListener('mouseup', releaseMsgChatPointer, {passive:true});
       window.addEventListener('blur', releaseMsgChatPointer, {passive:true});
       msgChatsNode?.addEventListener('scroll', () => {
+        stopMsgOpeningIntent();
         msgState.chatListScrollActive = true;
         renderMsgChatVirtualWindow();
         if (msgState.chatListScrollTimer) clearTimeout(msgState.chatListScrollTimer);
@@ -9585,8 +9701,8 @@
         const mutes = msgState.chatType === 'group' && msgState.chatId ? loadMuteStates() : Promise.resolve();
         msgPollPromise = Promise.allSettled([loadMsgChats(), history, mutes]).finally(() => { msgPollPromise = null; });
       };
-      document.addEventListener('visibilitychange', () => { syncMsgNewMessagesDisplay(); if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { discardMsgHistoryPrefetch(); closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
-      window.addEventListener('pagehide', () => { discardMsgHistoryPrefetch(); closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
+      document.addEventListener('visibilitychange', () => { syncMsgNewMessagesDisplay(); if (document.visibilityState === 'visible') { msgLastPollAt = 0; pollLocalMessages(); void loadGroupRoles(true).then(() => loadMuteStates()); void refreshQuarkProfilesSilently(); } else { dropMsgOpeningPrefetch(); discardMsgHistoryPrefetch(); closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); } });
+      window.addEventListener('pagehide', () => { dropMsgOpeningPrefetch(); discardMsgHistoryPrefetch(); closeMsgHeadMenu(); closeAdminPopover(); closeComposerMentionPicker(); cancelMsgQuoteJump(); stopMsgGroupSnapshots(); setMsgModal('msg-clear-modal', false, false); });
       setInterval(() => {
         void refreshQuarkProfilesSilently();
         if (document.visibilityState === 'visible') { void loadBotProfile(); }

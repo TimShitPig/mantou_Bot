@@ -5993,8 +5993,8 @@ def _读取会话元数据项(表: dict[str, Any], 会话标识: str, 类型: st
     键 = _会话作用域键(会话标识, 类型, appid)
     if 键 in 表:
         return 表[键]
-    if _旧会话元数据可复用(会话标识, 类型, appid):
-        return 表.get(会话标识)
+    if 会话标识 in 表 and _旧会话元数据可复用(会话标识, 类型, appid):
+        return 表[会话标识]
     return None
 
 
@@ -7896,18 +7896,18 @@ def _私聊联系人资料(
     会话列表 = [实时会话, 当前会话] if 实时会话 is not 当前会话 else [当前会话]
     最新姓名键 = (-1, -1, -1)
 
-    def 接纳姓名(昵称: str, 空白: bool, 时间戳: Any, 优先级: tuple[int, int]) -> None:
-        nonlocal 最新姓名键
-        if not 昵称 and not 空白:
-            return
+    def 姓名排序键(时间戳: Any, 优先级: tuple[int, int]) -> tuple[int, int, int]:
         try:
             时间 = max(0, int(时间戳 or 0))
         except (TypeError, ValueError, OverflowError):
             时间 = 0
-        键 = (时间, *优先级)
-        if 键 > 最新姓名键:
+        return (时间, *优先级)
+
+    def 接纳姓名(昵称: str, 空白: bool, 键: tuple[int, int, int]) -> None:
+        nonlocal 最新姓名键
+        if (昵称 or 空白) and 键 > 最新姓名键:
             最新姓名键 = 键
-            结果.update(nickname="" if 空白 else 昵称, nickname_blank=空白, nickname_ts=时间)
+            结果.update(nickname="" if 空白 else 昵称, nickname_blank=空白, nickname_ts=键[0])
 
     for 候选会话 in 会话列表:
         if str(候选会话.get("appid") or "").strip() != 应用 or 候选会话.get("chat_type") != "user":
@@ -7915,7 +7915,7 @@ def _私聊联系人资料(
         实时优先级 = int(候选会话 is 实时会话)
         空白 = 候选会话.get("private_author_nickname_blank") is True
         昵称 = "" if 空白 else _有效用户昵称(候选会话.get("private_author_nickname"), 标识)
-        接纳姓名(昵称, 空白, 候选会话.get("private_author_nickname_ts"), (实时优先级, 0))
+        接纳姓名(昵称, 空白, 姓名排序键(候选会话.get("private_author_nickname_ts"), (实时优先级, 0)))
         for 记录 in reversed(候选会话.get("messages") or []):
             if not isinstance(记录, dict) or str(记录.get("user_id") or "").strip() != 标识:
                 continue
@@ -7924,19 +7924,25 @@ def _私聊联系人资料(
             if 记录.get("_session") and str(记录["_session"]).strip() != 标识:
                 continue
             来源 = str(记录.get("source") or "")
-            原始 = _解析消息结构(记录.get("raw_message"))
             if (记录.get("is_self") or 记录.get("is_bot") is True
-                    or 来源.startswith("bot_") or 来源 == "web_panel"
-                    or _提取作者机器人状态(原始) is True):
+                    or 来源.startswith("bot_") or 来源 == "web_panel"):
                 continue
-            昵称, 空白 = _提取私聊作者昵称(原始, 标识)
-            if not 昵称 and not 空白:
-                空白 = 记录.get("nickname_blank") is True
-                if not 空白:
-                    昵称 = _有效用户昵称(记录.get("nickname"), 标识)
-            接纳姓名(昵称, 空白, 记录.get("ts"), (实时优先级, 1))
-            头像 = str(记录.get("avatar") or "").strip()
-            if not 结果["avatar"] and 头像.startswith(("https://", "http://")):
+            记录姓名键 = 姓名排序键(记录.get("ts"), (实时优先级, 1))
+            头像 = str(记录.get("avatar") or "").strip() if not 结果["avatar"] else ""
+            可补头像 = 头像.startswith(("https://", "http://"))
+            if 记录姓名键 <= 最新姓名键 and not 可补头像:
+                continue
+            原始 = _解析消息结构(记录.get("raw_message"))
+            if _提取作者机器人状态(原始) is True:
+                continue
+            if 记录姓名键 > 最新姓名键:
+                昵称, 空白 = _提取私聊作者昵称(原始, 标识)
+                if not 昵称 and not 空白:
+                    空白 = 记录.get("nickname_blank") is True
+                    if not 空白:
+                        昵称 = _有效用户昵称(记录.get("nickname"), 标识)
+                接纳姓名(昵称, 空白, 记录姓名键)
+            if 可补头像:
                 结果["avatar"] = 头像
     # 头像独立合并；通用成员资料的名字不能替代当前私聊明确提供的姓名状态。
     资料 = (成员资料缓存.get(标识) or {}).get(标识) or {}

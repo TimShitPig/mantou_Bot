@@ -1519,7 +1519,7 @@ def _识别媒体类型(响应类型: Any, 前缀: bytes, 地址: str, 模式: s
         return "image/webp"
     if 前缀.lstrip().startswith(b"<svg") or b"<svg" in 前缀[:512].lower():
         return "image/svg+xml"
-    if 模式 == "image":
+    if 模式 in {"image", "avatar"}:
         类型 = mimetypes.guess_type(urlsplit(地址).path)[0] or ""
         if 类型.startswith("image/"):
             return 类型
@@ -1592,6 +1592,9 @@ def _媒体代理失败响应(模式: str, *, 已过期: bool = False) -> web.Re
 
 
 def _媒体代理请求超时(模式: str) -> ClientTimeout:
+    if 模式 == "avatar":
+        # 头像使用短预算，避免 CDN 无响应时长时间占用浏览器及上游连接。
+        return ClientTimeout(total=5, connect=5, sock_connect=3, sock_read=3, ceil_threshold=6)
     return ClientTimeout(
         total=None if 模式 == "file" else 媒体代理超时秒,
         # connect 包含连接池等待；实际新建连接仍单独限制为十秒。
@@ -1609,8 +1612,9 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if len(地址) > 8192 or not _允许媒体地址(地址):
         return web.Response(status=400, text="媒体地址无效")
     模式 = str(request.query.get("mode") or "image").strip().lower()
-    if 模式 not in {"image", "file"}:
+    if 模式 not in {"image", "avatar", "file"}:
         模式 = "file"
+    显示图片 = 模式 in {"image", "avatar"}
     缓存键 = _媒体代理缓存键(地址)
     if _媒体代理失败缓存命中(缓存键):
         return _媒体代理失败响应(模式, 已过期=True)
@@ -1657,7 +1661,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 类型 = _识别媒体类型(
                     上游.headers.get("Content-Type"), 前缀, 最终地址, 模式
                 )
-                if 模式 == "image" and not 类型.startswith("image/"):
+                if 显示图片 and not 类型.startswith("image/"):
                     return web.Response(status=415, text="不是可预览的图片")
                 响应头 = {
                     # 只由登录用户自己的浏览器缓存；服务器不保存收到的图片字节。
@@ -1668,7 +1672,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 }
                 if 内容长度 > 0:
                     响应头["Content-Length"] = str(内容长度)
-                if 模式 == "image":
+                if 显示图片:
                     响应头["Content-Disposition"] = "inline"
                 else:
                     响应头["Content-Disposition"] = (
