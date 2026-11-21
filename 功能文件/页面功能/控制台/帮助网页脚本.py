@@ -5907,10 +5907,13 @@
           [msgState.composerAttachment, clearComposerMedia],
           [msgState.quote?.preview, clearMsgQuote],
         ];
+        const quoteMentionSelector = '[data-composer-quote-mention="1"]';
         for (const [card, remove] of items) {
           if (!card || !editor.contains(card)) continue;
+          let mention = null;
           if (forward) {
             if (startContainer !== card.parentNode || startContainer.childNodes[startOffset] !== card) continue;
+            if (card === msgState.quote?.preview) mention = editor.querySelector(quoteMentionSelector);
           } else {
             const prefix = document.createRange();
             prefix.setStartAfter(card);
@@ -5918,11 +5921,17 @@
             if (prefix.comparePoint(startContainer, startOffset) < 0) continue;
             prefix.setEnd(startContainer, startOffset);
             const fragment = prefix.cloneContents();
-            const mention = fragment.querySelector('[data-composer-quote-mention="1"]');
+            mention = fragment.querySelector(quoteMentionSelector);
             mention?.remove();
             const atCaretSpace = startContainer === card._composerCaretSpace && startOffset === 1;
             if (fragment.querySelector('br, [contenteditable="false"]')
               || (fragment.textContent !== '' && !((mention || atCaretSpace) && fragment.textContent === '\u00a0'))) continue;
+          }
+          if (mention) {
+            removeQuoteMention();
+            if (!forward) placeCaretAfterComposerCard(card);
+            else saveComposerSelection();
+            return true;
           }
           remove();
           saveComposerSelection();
