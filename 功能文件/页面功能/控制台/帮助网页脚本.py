@@ -5802,7 +5802,8 @@
         quote.name = summary.nickname;
         quote.nickname_blank = summary.nickname_blank;
         quote.text = summary.content;
-        previewText.innerHTML = `<span class="msg-quote-name">${esc(summary.nickname)}</span><span class="msg-quote-content">${esc(plainMsgPreview(summary.content) || '（空消息）')}</span>`;
+        const excerpt = esc(plainMsgPreview(summary.content) || '（空消息）');
+        previewText.innerHTML = `<span class="msg-quote-name">${esc(summary.nickname)}</span><span class="msg-quote-content" title="${excerpt}">${excerpt}</span>`;
         preview.hidden = false;
         getComposerEditor()?.querySelectorAll('[data-composer-quote-mention="1"]').forEach((node) => {
           node.textContent = `@${summary.nickname}`;
@@ -9537,7 +9538,10 @@
       $('msg-refresh-info').addEventListener('click', refreshGroupInfo);
       $('msg-remark').addEventListener('click', showRemarkDialog);
       bindGroupSettings();
-      $('msg-quote-clear').addEventListener('click', clearMsgQuote);
+      $('msg-quote-clear').addEventListener('click', () => {
+        clearMsgQuote();
+        getComposerEditor()?.focus({preventScroll:true});
+      });
       $('msg-raw-copy').addEventListener('click', async () => {
         const button = $('msg-raw-copy');
         const content = $('msg-raw-content').textContent || '';

@@ -145,7 +145,7 @@ from .帮助网页脚本 import 控制台脚本
                   <button type="button" data-msg-type="card">图文卡片</button>
                 </div>
                 <div class="msg-input-box" id="msg-input-box">
-                  <div class="msg-quote-preview" id="msg-quote-preview" hidden><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button" title="取消引用" aria-label="取消引用">×</button></div>
+                  <div class="msg-quote-preview msg-composer-quote" id="msg-quote-preview" hidden><span class="msg-quote-text" id="msg-quote-text"></span><button class="msg-action" id="msg-quote-clear" type="button" title="取消引用" aria-label="取消引用">×</button></div>
                   <div class="msg-attachment-inline" id="msg-media-inline" hidden>
                     <span class="msg-attachment-icon" id="msg-media-icon" aria-hidden="true">□</span>
                     <span class="msg-attachment-name" id="msg-media-name">待发送附件</span>
@@ -154,8 +154,7 @@ from .帮助网页脚本 import 控制台脚本
                   <div id="msg-editor" class="msg-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="msg-mention-picker" aria-expanded="false" data-placeholder="输入消息..." aria-label="消息内容"></div>
                 </div>
                 <div class="msg-toolbar">
-                  <span class="msg-send-shortcut" style="flex:1">Enter 发送 · Ctrl+Enter 换行</span>
-                  <button class="msg-btn primary" id="msg-send" type="button">发送</button>
+                  <button class="msg-btn primary" id="msg-send" type="button" title="Enter 发送 · Ctrl+Enter 换行">发送</button>
                 </div>
               </div>
               <div class="msg-group-settings" id="msg-group-settings" hidden>

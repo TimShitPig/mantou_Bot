@@ -278,7 +278,6 @@ from .总览外观 import 总览外观
       :root body.messages-workspace .msg-composer-toggle { width:44px; height:44px; margin:0; opacity:1; }
       :root body.messages-workspace .msg-toolbar,
       :root body.messages-workspace .msg-shell.msg-composer-compact .msg-toolbar { display:contents; }
-      :root body.messages-workspace .msg-send-shortcut { display:none; }
       :root body.messages-workspace #msg-send,
       :root body.messages-workspace .msg-shell.msg-composer-compact #msg-send {
         grid-column:2; grid-row:2; align-self:end; min-width:68px; min-height:44px;

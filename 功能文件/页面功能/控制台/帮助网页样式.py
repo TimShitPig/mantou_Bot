@@ -1758,8 +1758,7 @@
     :root body.messages-workspace .msg-input-box.drag-over { background:var(--primary-soft); outline:2px dashed var(--primary); outline-offset:-2px; }
     :root body.messages-workspace .msg-editor,:root body.messages-workspace .msg-editor:focus { min-height:27px; padding:10.5px 0; color:var(--ink); background:transparent; font-size:18px; }
     :root body.messages-workspace .msg-editor:empty::before { color:var(--soft); }
-    :root body.messages-workspace .msg-toolbar { flex:0 0 auto; gap:15px; min-height:43.5px; }
-    :root body.messages-workspace .msg-send-shortcut { color:var(--muted); font-size:15px; text-align:right; }
+    :root body.messages-workspace .msg-toolbar { flex:0 0 auto; justify-content:flex-end; min-height:38px; }
     :root body.messages-workspace #msg-send { min-width:93.75px; min-height:43.5px; padding:6.75px 16.5px; border:1px solid #0077f6; border-radius:9.75px; background:linear-gradient(145deg,#1388ff,#0078ff); box-shadow:inset 0 1px 0 #ffffff20,0 1px 2px #0067df1a; font-size:18px; font-weight:500; }
     :root body.messages-workspace .msg-shell.msg-list-collapsed { grid-template-columns:38px minmax(0,1fr); }
     :root body.messages-workspace .msg-shell.msg-list-collapsed .msg-list-collapse { top:26px; right:5px; }
@@ -1800,8 +1799,51 @@
     :root body.messages-workspace .msg-shell.msg-composer-compact .msg-input-box { min-height:21px; }
     :root body.messages-workspace .msg-shell.msg-composer-compact .msg-editor { min-height:21px; padding:3px 0; font-size:13.5px; }
     :root body.messages-workspace .msg-shell.msg-composer-compact .msg-toolbar { min-height:31.5px; }
-    :root body.messages-workspace .msg-shell.msg-composer-compact .msg-send-shortcut { font-size:10.5px; }
     :root body.messages-workspace .msg-shell.msg-composer-compact #msg-send { min-width:81px; min-height:31.5px; font-size:13.5px; }
+    @media (min-width:761px) {
+      :root body.messages-workspace .msg-shell:not(.msg-composer-collapsed) .msg-composer {
+        padding:9px 19px 11px; gap:5px;
+      }
+      :root body.messages-workspace .msg-composer-topbar,
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer-topbar { top:0; gap:8px; }
+      :root body.messages-workspace .msg-tool-btn svg { width:21px; height:21px; }
+      :root body.messages-workspace #msg-send {
+        min-width:91px; min-height:36px; padding:4px 18px; border-radius:9px; font-size:15px;
+      }
+      :root body.messages-workspace .msg-composer-quote {
+        align-items:center; align-self:stretch; flex:0 0 auto; box-sizing:border-box;
+        width:100%; max-width:none; margin:0; padding:6px 10px 6px 11px;
+        border:0; border-radius:9px; background:var(--msg-quote-fill); color:var(--muted);
+      }
+      :root body.messages-workspace .msg-composer-quote .msg-quote-text { gap:2px; line-height:1.35; }
+      :root body.messages-workspace .msg-composer-quote .msg-quote-name { color:var(--ink); }
+      :root body.messages-workspace .msg-composer-quote .msg-quote-content {
+        display:block; white-space:nowrap; text-overflow:ellipsis;
+      }
+      :root body.messages-workspace .msg-composer-quote .msg-action {
+        display:grid; place-items:center; width:22px; height:22px; padding:0;
+        border-radius:50%; color:var(--muted); background:var(--hover); line-height:1;
+      }
+      :root body.messages-workspace .msg-composer-quote .msg-action:hover { color:var(--ink); background:var(--panel); }
+      :root body.messages-workspace .msg-editor,:root body.messages-workspace .msg-editor:focus {
+        padding:5px 5px 2px; font-size:15px; line-height:1.5; border-radius:6px;
+      }
+      :root body.messages-workspace .msg-editor:focus-visible {
+        outline:1px solid var(--line); outline-offset:-1px;
+      }
+      :root body.messages-workspace .composer-inline-image img { max-width:128px; max-height:64px; }
+      :root body.messages-workspace .msg-shell:not(.msg-composer-collapsed).msg-composer-compact .msg-composer {
+        padding:4px 17px; gap:3px;
+      }
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer-toggle {
+        width:24px; height:24px; min-height:24px; padding:0;
+      }
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-toolbar { min-height:28px; }
+      :root body.messages-workspace .msg-shell.msg-composer-compact #msg-send { min-height:28px; padding-block:2px; }
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer-quote { padding-block:2px; font-size:11px; }
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer-quote .msg-quote-text { gap:1px; line-height:1.25; }
+      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-editor { min-height:22px; padding:0 4px; }
+    }
     @media (max-width:1050px) and (min-width:761px) {
       :root body.messages-workspace .msg-shell { grid-template-columns:minmax(220px,min(var(--msg-list-width,273px),273px,calc(100% - 285px))) minmax(0,1fr); }
       :root body.messages-workspace .msg-head { padding-inline:18px; }
@@ -1866,14 +1908,12 @@
       :root body.messages-workspace .msg-file-info small { font-size:14px; }
       :root body.messages-workspace .msg-chat-top small { font-size:12px; }
       :root body.messages-workspace .msg-chat-sub { font-size:14px; }
-      :root body.messages-workspace .msg-send-shortcut { font-size:10px; }
       :root body.messages-workspace #msg-send { min-width:76px; min-height:38px; padding:5px 16px; font-size:15px; }
       :root body.messages-workspace .msg-shell.msg-composer-compact .msg-composer-topbar { min-height:30px; gap:13px; }
       :root body.messages-workspace .msg-shell.msg-composer-compact .msg-tool-btn { width:29px; height:29px; padding:0; }
       :root body.messages-workspace .msg-shell.msg-composer-compact .msg-tool-btn svg { width:23px; height:23px; }
       :root body.messages-workspace .msg-shell.msg-composer-compact .msg-input-box { min-height:38px; }
       :root body.messages-workspace .msg-shell.msg-composer-compact .msg-toolbar { min-height:38px; gap:8px; }
-      :root body.messages-workspace .msg-shell.msg-composer-compact .msg-send-shortcut { font-size:10px; }
       :root body.messages-workspace .msg-shell.msg-composer-compact #msg-send { min-width:76px; min-height:38px; padding:5px 16px; font-size:15px; }
       :root body.messages-workspace .msg-media img { max-width:240px; max-height:240px; }
       :root body.messages-workspace .msg-video-media video { width:min(320px,80vw); max-height:240px; }
