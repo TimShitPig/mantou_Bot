@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.510-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.511-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.510 |
+| 版本 | v6.1.511 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -138,7 +138,7 @@ QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后�
 
 ### 书耽账号
 
-在馒头Bot后台选择机器人，打开「机器人配置 → 书耽」。把原脚本 `ACCOUNT` 和 `TOKEN` 中的值分别填入对应字段，保存后新任务立即生效。两个字段均只写入，留空保留已保存值。该机器人尚未保存书耽配置时，仍可使用 AstrBot 进程已有的 `MANTOU_SHUBL_ACCOUNT` 和 `MANTOU_SHUBL_TOKEN`。机器人用户可以直接发书耽链接或找书选号。阅读权限以单章接口为准，所有章节均可读才合成整本 TXT。
+同一台 Windows 电脑上的 AstrBot 可以直接读取原脚本 `D:\Tencent\Downloads\shubl - 副本.py` 里的 `ACCOUNT` 和 `TOKEN`。AstrBot 运行在另一台机器时，将原文件放在该机器的 AstrBot 数据目录下 `plugin_data/馒头bot/shubl - 副本.py`，即可直接复用。插件只读取这两个字面量。后台「机器人配置 → 书耽」中已有的机器人专属配置优先，其次使用已有的进程环境变量。机器人用户可以直接发书耽链接或找书选号，生成的 TXT 使用番茄的文件名、声明、书籍信息、章节排版和编码。
 
 ### 晋江账号与扫码
 

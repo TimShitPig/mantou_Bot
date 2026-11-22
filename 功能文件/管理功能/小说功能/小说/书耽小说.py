@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import hashlib
@@ -102,14 +103,53 @@ def _创建书耽会话(连接数: int) -> aiohttp.ClientSession:
     )
 
 
+def _书耽私有脚本路径() -> Path:
+    if os.name == "nt":
+        原脚本 = Path(r"D:\Tencent\Downloads\shubl - 副本.py")
+        if 原脚本.is_file():
+            return 原脚本
+    from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
+    return Path(get_astrbot_plugin_data_path()) / "馒头bot" / "shubl - 副本.py"
+
+
+def _读取原脚本书耽凭据() -> tuple[str, str]:
+    """只读原脚本声明的一对字面量，不导入或执行脚本。"""
+    try:
+        with _书耽私有脚本路径().open("rb") as 文件:
+            内容 = 文件.read(65537)
+        if len(内容) > 65536:
+            return "", ""
+        语法树 = ast.parse(内容)
+    except (ImportError, OSError, SyntaxError, ValueError):
+        return "", ""
+    凭据 = {}
+    for 语句 in 语法树.body:
+        if (
+            isinstance(语句, ast.Assign) and len(语句.targets) == 1
+            and isinstance(语句.targets[0], ast.Name)
+            and 语句.targets[0].id in {"ACCOUNT", "TOKEN"}
+        ):
+            名称 = 语句.targets[0].id
+            if 名称 in 凭据 or not isinstance(语句.value, ast.Constant):
+                return "", ""
+            凭据[名称] = _文本(语句.value.value)
+    if 凭据.get("ACCOUNT") and 凭据.get("TOKEN"):
+        return 凭据["TOKEN"], 凭据["ACCOUNT"]
+    return "", ""
+
+
 def _读取书耽凭据(配置: Any = None) -> tuple[str, str]:
     设置 = 配置.get("shubl_account_settings") if isinstance(配置, dict) else None
     if isinstance(设置, dict):
         令牌, 账号 = _文本(设置.get("shubl_token")), _文本(设置.get("shubl_account"))
         if 令牌 or 账号:
             return 令牌, 账号
-    return (os.environ.get("MANTOU_SHUBL_TOKEN", "").strip(),
-            os.environ.get("MANTOU_SHUBL_ACCOUNT", "").strip())
+    令牌 = os.environ.get("MANTOU_SHUBL_TOKEN", "").strip()
+    账号 = os.environ.get("MANTOU_SHUBL_ACCOUNT", "").strip()
+    if 令牌 or 账号:
+        return 令牌, 账号
+    return _读取原脚本书耽凭据()
 
 
 def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes] | None:
