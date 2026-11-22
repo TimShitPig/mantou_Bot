@@ -51,11 +51,13 @@ _源文件不可用 = "书耽源文件不可用，请联系管理员"
 
 
 class 书耽请求错误(RuntimeError):
-    def __init__(self, 原因: str, *, HTTP状态: int | None = None, 业务码: int | None = None):
+    def __init__(self, 原因: str, *, HTTP状态: int | None = None, 业务码: int | None = None,
+                 文件状态: str | None = None):
         super().__init__(原因)
         self.原因 = 原因
         self.HTTP状态 = HTTP状态
         self.业务码 = 业务码
+        self.文件状态 = 文件状态
 
 
 def _数字(值: Any) -> str:
@@ -119,10 +121,18 @@ def _读取原脚本书耽凭据() -> tuple[str, str]:
         with _书耽私有脚本路径().open("rb") as 文件:
             内容 = 文件.read(65537)
         if len(内容) > 65536:
-            return "", ""
+            raise 书耽请求错误("source_file_unavailable", 文件状态="source_too_large")
         语法树 = ast.parse(内容)
-    except (ImportError, OSError, SyntaxError, ValueError):
-        return "", ""
+    except FileNotFoundError:
+        raise 书耽请求错误("source_file_unavailable", 文件状态="source_missing") from None
+    except PermissionError:
+        raise 书耽请求错误("source_file_unavailable", 文件状态="source_permission_denied") from None
+    except ImportError:
+        raise 书耽请求错误("source_file_unavailable", 文件状态="source_location_unavailable") from None
+    except OSError:
+        raise 书耽请求错误("source_file_unavailable", 文件状态="source_read_failed") from None
+    except (SyntaxError, ValueError, RecursionError):
+        raise 书耽请求错误("source_file_unavailable", 文件状态="invalid_source") from None
     凭据 = {}
     for 语句 in 语法树.body:
         if (
@@ -132,27 +142,41 @@ def _读取原脚本书耽凭据() -> tuple[str, str]:
         ):
             名称 = 语句.targets[0].id
             if 名称 in 凭据 or not isinstance(语句.value, ast.Constant):
-                return "", ""
+                raise 书耽请求错误("source_file_unavailable", 文件状态="invalid_source")
             凭据[名称] = _文本(语句.value.value)
     if 凭据.get("ACCOUNT") and 凭据.get("TOKEN"):
         return 凭据["TOKEN"], 凭据["ACCOUNT"]
-    return "", ""
+    raise 书耽请求错误("source_file_unavailable", 文件状态="invalid_source")
 
 
 def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes] | None:
-    凭据 = _读取原脚本书耽凭据()
-    if not all(凭据):
+    try:
+        凭据 = _读取原脚本书耽凭据()
+    except 书耽请求错误:
         return None
     指纹 = hashlib.sha256(json.dumps(凭据, ensure_ascii=False).encode("utf-8")).digest()
     return 获取当前机器人AppID(配置), 指纹
+
+
+def _核对书耽目录章数(目录: list[dict[str, Any]], 预期数量: int, 末章资料: Any) -> None:
+    if not 预期数量 or len(目录) == 预期数量:
+        return
+    # 详情的总数可能比完整目录少一章，此时用同书的末章及连续序号复核。
+    if (
+        len(目录) == 预期数量 + 1
+        and isinstance(末章资料, dict)
+        and _编号(末章资料.get("chapter_id")) == _编号(目录[-1].get("chapter_id"))
+        and _编号(末章资料.get("chapter_index")) == str(len(目录))
+        and all(_编号(章.get("chapter_index")) == str(序号) for 序号, 章 in enumerate(目录, 1))
+    ):
+        return
+    raise 书耽请求错误("incomplete_catalog")
 
 
 class 书耽客户端:
     def __init__(self, 会话: aiohttp.ClientSession):
         self.会话 = 会话
         self._令牌, self._账号 = _读取原脚本书耽凭据()
-        if not self._令牌 or not self._账号:
-            raise 书耽请求错误("source_file_unavailable")
 
     async def _请求(self, 接口: str, **字段: Any) -> dict[str, Any]:
         数据 = {
@@ -209,7 +233,7 @@ class 书耽客户端:
             raise 书耽请求错误("invalid_book")
         return 书
 
-    async def 目录(self, 书籍编号: str, 预期数量: int) -> list[dict[str, Any]]:
+    async def 目录(self, 书籍编号: str, 预期数量: int, *, 末章资料: Any = None) -> list[dict[str, Any]]:
         数据 = await self._请求(_目录接口, book_id=书籍编号, last_update_time="0")
         分卷 = 数据.get("chapter_list_group")
         if not isinstance(分卷, list):
@@ -230,8 +254,7 @@ class 书耽客户端:
                 章节列表.append(章)
         if not 章节列表:
             raise 书耽请求错误("empty_catalog")
-        if 预期数量 and len(章节列表) != 预期数量:
-            raise 书耽请求错误("incomplete_catalog")
+        _核对书耽目录章数(章节列表, 预期数量, 末章资料)
         return 章节列表
 
     async def 正文(self, 书籍编号: str, 章节信息: dict[str, Any]) -> str:
@@ -342,7 +365,9 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
         async with _创建书耽会话(书耽正文最大并发数) as 会话:
             客户端 = 书耽客户端(会话)
             详情 = await 客户端.详情(书籍编号)
-            目录 = await 客户端.目录(书籍编号, int(_编号(详情.get("chapter_amount")) or "0"))
+            目录 = await 客户端.目录(
+                书籍编号, int(_编号(详情.get("chapter_amount")) or "0"), 末章资料=详情.get("last_chapter_info")
+            )
             书籍信息 = _书籍资料(详情)
             书籍信息["word_count"] = 格式化小说字数(书籍信息["word_count"])
             yield 番茄小说.格式化番茄下载提示(书籍信息, len(目录))
@@ -365,9 +390,10 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
             yield str(发送.get("fallback_text") or _发送失败)
     except Exception as 错误:
         受控错误 = 错误 if isinstance(错误, 书耽请求错误) else None
-        logger.warning("书耽下载失败：阶段=%s，类型=%s，原因=%s，HTTP=%s，业务码=%s",
+        logger.warning("书耽下载失败：阶段=%s，类型=%s，原因=%s，HTTP=%s，业务码=%s，源文件状态=%s",
                        阶段, type(错误).__name__, 受控错误.原因 if 受控错误 else "operation_failed",
-                       受控错误.HTTP状态 if 受控错误 else None, 受控错误.业务码 if 受控错误 else None)
+                       受控错误.HTTP状态 if 受控错误 else None, 受控错误.业务码 if 受控错误 else None,
+                       受控错误.文件状态 if 受控错误 else None)
         if 受控错误 and 受控错误.原因 == "chapter_unavailable":
             yield _章节不可读
         elif 受控错误 and 受控错误.原因 == "source_file_unavailable":
