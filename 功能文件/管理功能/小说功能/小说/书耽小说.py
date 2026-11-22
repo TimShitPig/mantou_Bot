@@ -1,4 +1,4 @@
-"""书耽 App 搜索、目录及授权正文。"""
+"""书耽官网游客与 App 授权下载。"""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ import html
 import json
 import re
 from collections import deque
+from html.parser import HTMLParser
 from itertools import islice
 from pathlib import Path
 from typing import Any, AsyncIterator
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from weakref import WeakValueDictionary
 
 import aiohttp
@@ -35,6 +36,8 @@ from 功能文件.管理功能.网盘功能 import 小说网盘
 
 
 书耽正文最大并发数 = 200
+_书耽游客并发数 = 4
+_书耽官网 = "https://www.shubl.com"
 _服务地址 = "https://app.shubl.com"
 _协议密钥 = base64.b64decode("L6alxSR4ttjXvcGpZozYtdcJtG4l0tSnQplRUONIRsw=")
 _应用签名 = "f73576612783f8ed8b68cdf73a56be94"
@@ -45,6 +48,8 @@ _目录接口 = "/chapter/get_chapter_list_group_by_division"
 _章节接口 = "/chapter/get_chapter_info"
 if "_章节限额" not in globals():
     _章节限额 = WeakValueDictionary()
+if "_书耽游客限额" not in globals():
+    _书耽游客限额 = WeakValueDictionary()
 
 _下载失败 = "下载失败 请重试"
 _发送失败 = "文件发送失败，请稍后再试"
@@ -179,10 +184,10 @@ def _创建书耽会话(连接数: int) -> aiohttp.ClientSession:
     )
 
 
-def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes] | None:
+def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes]:
     凭据 = _书耽请求凭据
     if 凭据 is None:
-        return None
+        return 获取当前机器人AppID(配置), b"public-web"
     指纹 = hashlib.sha256(json.dumps(凭据, ensure_ascii=False).encode("utf-8")).digest()
     return 获取当前机器人AppID(配置), 指纹
 
@@ -203,6 +208,9 @@ def _核对书耽目录章数(目录: list[dict[str, Any]], 预期数量: int, �
 
 
 class 书耽客户端:
+    正文并发数 = 书耽正文最大并发数
+    正文限额 = _章节限额
+
     def __init__(self, 会话: aiohttp.ClientSession):
         self.会话 = 会话
         if _书耽请求凭据 is None:
@@ -309,12 +317,12 @@ class 书耽客户端:
 
     async def 下载(self, 书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, Any]]:
         总数 = len(目录)
-        并发数 = min(书耽正文最大并发数, 总数)
+        并发数 = min(self.正文并发数, 总数)
         循环 = asyncio.get_running_loop()
-        限额 = _章节限额.get(循环)
+        限额 = self.正文限额.get(循环)
         if 限额 is None:
-            限额 = asyncio.Semaphore(书耽正文最大并发数)
-            _章节限额[循环] = 限额
+            限额 = asyncio.Semaphore(self.正文并发数)
+            self.正文限额[循环] = 限额
         待下载 = iter(enumerate(目录))
         结果 = [{} for _ in 目录]
         已完成 = 0
@@ -349,6 +357,340 @@ class 书耽客户端:
                     项.cancel()
             await asyncio.gather(*任务, return_exceptions=True)
         return 结果
+
+
+class _书耽网页节点:
+    __slots__ = ("标签", "属性", "内容")
+
+    def __init__(self, 标签: str, 属性: list[tuple[str, str | None]] | None = None):
+        self.标签 = 标签
+        self.属性 = dict(属性 or ())
+        self.内容: list[_书耽网页节点 | str] = []
+
+    def 匹配类(self, 类名: str) -> bool:
+        return 类名 in (self.属性.get("class") or "").split()
+
+    def 子树(self):
+        待检查 = [self]
+        while 待检查:
+            节点 = 待检查.pop()
+            yield 节点
+            待检查.extend(项 for 项 in reversed(节点.内容) if isinstance(项, _书耽网页节点))
+
+    def 文本(self) -> str:
+        片段 = []
+        待检查 = list(reversed(self.内容))
+        while 待检查:
+            项 = 待检查.pop()
+            if isinstance(项, str):
+                片段.append(项)
+            elif 项.标签 == "br":
+                片段.append("\n")
+            elif 项.标签 not in {"script", "style"}:
+                待检查.extend(reversed(项.内容))
+        return "".join(片段).strip()
+
+
+class _书耽网页解析器(HTMLParser):
+    _空标签 = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+                         "meta", "param", "source", "track", "wbr"})
+
+    def __init__(self, 页面: str):
+        super().__init__(convert_charrefs=True)
+        self.根 = _书耽网页节点("")
+        self._栈 = [self.根]
+        self._身份 = []
+        self._授权 = []
+        self.feed(页面)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        节点 = _书耽网页节点(tag, attrs)
+        self._栈[-1].内容.append(节点)
+        if tag not in self._空标签:
+            if len(self._栈) >= 128:
+                raise 书耽请求错误("web_structure")
+            self._栈.append(节点)
+
+    def handle_startendtag(self, tag, attrs):
+        self._栈[-1].内容.append(_书耽网页节点(tag, attrs))
+
+    def handle_endtag(self, tag):
+        for 位置 in range(len(self._栈) - 1, 0, -1):
+            if self._栈[位置].标签 == tag:
+                del self._栈[位置:]
+                return
+
+    def handle_data(self, data):
+        节点 = self._栈[-1]
+        if 节点.标签 == "script" and not 节点.属性.get("src"):
+            类型 = 节点.属性.get("type")
+            if 类型 and 类型 not in {"text/javascript", "application/javascript"}:
+                return
+            self._身份.extend(re.findall(
+                r'(?m)^[ \t]*SD\.book\s*=\s*\{[ \t]*book_id:\s*([1-9][0-9]{0,19})\s*,'
+                r'\s*chapter_id:\s*([1-9][0-9]{0,19}|""|\'\')\s*[,}]', data
+            ))
+            self._授权.extend(re.findall(r"(?m)^[ \t]*var[ \t]+auth_access[ \t]*=[ \t]*([^;\r\n]*?)[ \t]*;", data))
+        elif 节点.标签 != "style":
+            节点.内容.append(data)
+
+    def 核对身份(self, 书籍编号: str, 章节编号: str = "") -> bool:
+        if len(self._身份) != 1:
+            return False
+        书号, 章号 = self._身份[0]
+        return 书号 == 书籍编号 and (章号.strip("'\"") == 章节编号)
+
+    def 核对游客授权(self) -> None:
+        if self._授权 == ["0"]:
+            raise 书耽请求错误("chapter_unavailable")
+        if self._授权 != ["1"]:
+            raise 书耽请求错误("chapter_structure")
+
+
+_书耽网页章节路径 = re.compile(r"/chapter/book_chapter_detail/([1-9][0-9]{0,19})/?")
+
+
+def _书耽网页目录章节编号(链接: str) -> str:
+    try:
+        地址 = urlsplit(链接)
+    except ValueError:
+        return ""
+    if 地址.scheme or 地址.netloc:
+        if 地址.scheme != "https" or 地址.netloc.lower() != "www.shubl.com":
+            return ""
+    if 地址.query or 地址.fragment:
+        return ""
+    匹配 = _书耽网页章节路径.fullmatch(地址.path)
+    return 匹配[1] if 匹配 else ""
+
+
+def _解析书耽网页详情(页面: str, 书籍编号: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    网页 = _书耽网页解析器(页面)
+    if not 网页.核对身份(书籍编号):
+        raise 书耽请求错误("invalid_book")
+
+    标题栏 = 简介栏 = 字数栏 = 目录栏 = None
+    作者右栏 = []
+    for 节点 in 网页.根.子树():
+        if 节点.匹配类("book-title") and 标题栏 is None:
+            标题栏 = 节点
+        elif 节点.匹配类("book-brief") and 简介栏 is None:
+            简介栏 = 节点
+        elif 节点.匹配类("book-info-numbers") and 字数栏 is None:
+            字数栏 = 节点
+        elif 节点.匹配类("right"):
+            作者右栏.append(节点)
+        if 节点.属性.get("id") == "chapter_list":
+            if 目录栏 is not None:
+                raise 书耽请求错误("invalid_catalog")
+            目录栏 = 节点
+
+    标题 = ""
+    状态 = "未知"
+    if 标题栏 is not None:
+        for 项 in 标题栏.内容:
+            if not isinstance(项, _书耽网页节点):
+                continue
+            if 项.标签 == "span" and not 标题:
+                标题 = 项.文本()
+            elif 项.匹配类("tag"):
+                标记 = _书耽书籍状态({"up_status": 项.文本()})
+                if 标记 != "未知":
+                    状态 = 标记
+    if not 标题:
+        raise 书耽请求错误("invalid_book")
+
+    作者 = "未知"
+    for 右栏 in 作者右栏:
+        作者栏 = next((项 for 项 in 右栏.子树() if 项.匹配类("user-info")), None)
+        if 作者栏 is not None:
+            作者 = next((项.文本() for 项 in 作者栏.子树()
+                         if 项.匹配类("username") and 项.匹配类("text-primary")), "") or "未知"
+            if 作者 != "未知":
+                break
+
+    简介 = re.sub(r"^简介\s*[：:]\s*", "", 简介栏.文本()) if 简介栏 is not None else ""
+    字数 = ""
+    if 字数栏 is not None:
+        for 项 in 字数栏.内容:
+            if isinstance(项, _书耽网页节点) and 项.标签 == "span":
+                匹配 = re.fullmatch(r"●?\s*总字数\s*[：:]\s*([0-9.,，]+(?:[万亿])?字?)", 项.文本())
+                if 匹配:
+                    字数 = 匹配[1]
+                    break
+    书籍信息 = {"title": 标题, "author": 作者, "status": 状态, "word_count": 字数, "intro": 简介}
+
+    if 目录栏 is None:
+        raise 书耽请求错误("invalid_catalog")
+    目录 = []
+    已见 = set()
+    for 章项目 in 目录栏.子树():
+        if not 章项目.匹配类("chapter_item"):
+            continue
+        链接列表 = []
+        锁定 = False
+        for 项 in 章项目.子树():
+            if 项.标签 == "a":
+                链接列表.append(项)
+            if 项.匹配类("lock"):
+                锁定 = True
+        if len(链接列表) != 1:
+            raise 书耽请求错误("invalid_catalog")
+        链接 = 链接列表[0]
+        章节编号 = _书耽网页目录章节编号(链接.属性.get("href") or "")
+        章节标题 = 链接.文本()
+        if not 章节编号 or 章节编号 in 已见 or not 章节标题:
+            raise 书耽请求错误("invalid_catalog")
+        已见.add(章节编号)
+        目录.append({"chapter_id": 章节编号, "chapter_index": len(目录) + 1,
+                   "chapter_title": 章节标题, "locked": 锁定})
+    if not 目录:
+        raise 书耽请求错误("empty_catalog")
+    return 书籍信息, 目录
+
+
+def _校验书耽游客章节(页面: str, 书籍编号: str, 章节编号: str) -> None:
+    网页 = _书耽网页解析器(页面)
+    if not 网页.核对身份(书籍编号, 章节编号):
+        raise 书耽请求错误("chapter_identity")
+    网页.核对游客授权()
+    if not any(节点.属性.get("id") == "J_BookRead" for 节点 in 网页.根.子树()):
+        raise 书耽请求错误("chapter_structure")
+
+
+class 书耽网页客户端(书耽客户端):
+    正文并发数 = _书耽游客并发数
+    正文限额 = _书耽游客限额
+
+    def __init__(self, 会话: aiohttp.ClientSession):
+        self.会话 = 会话
+
+    async def _读取页面(self, 路径: str, *, 会话: aiohttp.ClientSession | None = None,
+                      参数: dict[str, str] | None = None, 来源页: str = "") -> str:
+        请求会话 = 会话 if 会话 is not None else self.会话
+        请求头 = {"Referer": _书耽官网 + 来源页, "X-Requested-With": "XMLHttpRequest"} if 来源页 else None
+        try:
+            async with 请求会话.get(_书耽官网 + 路径, params=参数, headers=请求头, allow_redirects=False) as 响应:
+                if 响应.status != 200:
+                    原因 = "rate_limited" if 响应.status == 429 else "http_rejected"
+                    raise 书耽请求错误(原因, HTTP状态=响应.status)
+                内容 = bytearray()
+                async for 分段 in 响应.content.iter_chunked(65536):
+                    内容.extend(分段)
+                    if len(内容) > _最大响应字节:
+                        raise 书耽请求错误("response_too_large")
+        except (aiohttp.ClientError, TimeoutError):
+            raise 书耽请求错误("transport_failed") from None
+        try:
+            return 内容.decode("utf-8")
+        except UnicodeError:
+            raise 书耽请求错误("invalid_response") from None
+
+    async def _网页JSON(self, 路径: str, 会话: aiohttp.ClientSession,
+                      参数: dict[str, str], 来源页: str) -> dict[str, Any]:
+        正文 = await self._读取页面(路径, 会话=会话, 参数=参数, 来源页=来源页)
+        try:
+            数据 = json.loads(正文)
+        except (ValueError, RecursionError):
+            raise 书耽请求错误("invalid_response") from None
+        if not isinstance(数据, dict):
+            raise 书耽请求错误("invalid_response")
+        代码 = _数字(数据.get("code"))
+        if 代码 != "100000":
+            raise 书耽请求错误("business_rejected", 业务码=int(代码) if 代码 else None)
+        return 数据
+
+    async def 详情和目录(self, 书籍编号: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        页面 = await self._读取页面(f"/book/book_detail/{书籍编号}")
+        return await asyncio.to_thread(_解析书耽网页详情, 页面, 书籍编号)
+
+    async def 正文(self, 书籍编号: str, 章节信息: dict[str, Any]) -> str:
+        if 章节信息.get("locked") is not False:
+            raise 书耽请求错误("chapter_unavailable")
+        章节编号 = _编号(章节信息.get("chapter_id"))
+        if not 章节编号:
+            raise 书耽请求错误("invalid_chapter")
+        来源页 = f"/chapter/book_chapter_detail/{章节编号}"
+        # 官网把本章票据绑定到 Cookie 会话。不同章隔离 Cookie，仍共享连接池。
+        async with aiohttp.ClientSession(
+            connector=self.会话.connector, connector_owner=False,
+            timeout=self.会话.timeout, trust_env=self.会话.trust_env,
+        ) as 会话:
+            页面 = await self._读取页面(来源页, 会话=会话)
+            _校验书耽游客章节(页面, 书籍编号, 章节编号)
+            票据响应 = await self._网页JSON(
+                "/chapter/ajax_get_session_code", 会话, {"chapter_id": 章节编号}, 来源页
+            )
+            票据 = 票据响应.get("chapter_access_key")
+            if not isinstance(票据, str) or not 票据 or len(票据) > 1024 or not 票据.isascii():
+                raise 书耽请求错误("invalid_chapter_ticket")
+            结果 = await self._网页JSON(
+                "/chapter/get_book_chapter_detail_info", 会话,
+                {"chapter_id": 章节编号, "chapter_access_key": 票据}, 来源页
+            )
+        内容 = _解码书耽网页正文(结果, 票据)
+        if not 去除章节正文重复标题(章节信息["chapter_title"], 内容):
+            raise 书耽请求错误("empty_chapter")
+        return 内容
+
+    async def 搜索(self, 关键词: str, 数量: int) -> list[dict[str, Any]]:
+        页面 = await self._读取页面("/index/get_search_book_list/" + quote(关键词, safe=""))
+        网页 = _书耽网页解析器(页面)
+        列表 = next((节点 for 节点 in 网页.根.子树() if 节点.匹配类("book-list")), None)
+        if 列表 is None:
+            # 官网空结果有明确的计数标记。
+            if re.search(r"0\s*(?:</[^>]+>\s*)*条符合关键词的搜索结果", 页面):
+                return []
+            raise 书耽请求错误("invalid_search")
+        结果 = []
+        已见 = set()
+        for 节点 in 列表.子树():
+            if not 节点.匹配类("book-info"):
+                continue
+            链接 = next((项 for 项 in 节点.子树() if 项.标签 == "a" and 项.匹配类("book-name")), None)
+            if 链接 is None:
+                continue
+            try:
+                地址 = urlsplit(链接.属性.get("href") or "")
+            except ValueError:
+                continue
+            匹配 = _书耽详情路径.fullmatch(地址.path)
+            if 地址.scheme != "https" or 地址.netloc.lower() != "www.shubl.com" or not 匹配:
+                continue
+            书号 = 匹配[1]
+            标题 = 链接.文本()
+            if 书号 in 已见 or not 标题:
+                continue
+            作者栏 = next((项.文本() for 项 in 节点.子树() if 项.匹配类("text-muted")), "")
+            作者 = re.search(r"作者\s*[：:]\s*([^\r\n]+)", 作者栏)
+            结果.append({"book_id": 书号, "book_name": 标题, "author_name": 作者[1].strip() if 作者 else ""})
+            已见.add(书号)
+            if len(结果) == 数量:
+                break
+        if not 结果 and any(节点.匹配类("book-info") for 节点 in 列表.子树()):
+            raise 书耽请求错误("invalid_search")
+        return 结果
+
+
+def _解码书耽网页正文(结果: dict[str, Any], 票据: str) -> str:
+    内容 = 结果.get("chapter_content")
+    密钥列表 = 结果.get("encryt_keys")
+    if not isinstance(内容, str) or not 内容 or not isinstance(密钥列表, list) or not 密钥列表:
+        raise 书耽请求错误("invalid_chapter")
+    try:
+        # 复用正常网页阅读器的两层解码顺序，仅处理官网已经授权的正文。
+        for 索引 in (ord(票据[-1]) % len(密钥列表), ord(票据[0]) % len(密钥列表)):
+            加密数据 = base64.b64decode(内容, validate=True)
+            if len(加密数据) < 32 or len(加密数据) % AES.block_size:
+                raise ValueError("invalid ciphertext")
+            密钥 = base64.b64decode(密钥列表[索引], validate=True)
+            解码器 = AES.new(密钥, AES.MODE_CBC, iv=加密数据[:16])
+            内容 = unpad(解码器.decrypt(加密数据[16:]), AES.block_size)
+        网页 = _书耽网页解析器(内容.decode("utf-8"))
+    except (TypeError, ValueError, RecursionError):
+        raise 书耽请求错误("invalid_chapter") from None
+    return "\n".join(正文 for 节点 in 网页.根.子树() if 节点.标签 == "p" and (正文 := 节点.文本()))
 
 
 def _保存缓存(文件名: str, 内容: bytes) -> Path:
@@ -393,21 +735,38 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
     阶段 = "metadata"
     路径 = None
     try:
-        async with _创建书耽会话(书耽正文最大并发数) as 会话:
-            客户端 = 书耽客户端(会话)
-            详情 = await 客户端.详情(书籍编号)
-            目录 = await 客户端.目录(
-                书籍编号, int(_编号(详情.get("chapter_amount")) or "0"), 末章资料=详情.get("last_chapter_info")
-            )
-            书籍信息 = _书籍资料(详情)
+        游客 = _书耽请求凭据 is None
+        并发数 = _书耽游客并发数 if 游客 else 书耽正文最大并发数
+        跳过章数 = 0
+        async with _创建书耽会话(并发数) as 会话:
+            if 游客:
+                客户端 = 书耽网页客户端(会话)
+                书籍信息, 官网目录 = await 客户端.详情和目录(书籍编号)
+                目录 = [章 for 章 in 官网目录 if 章["locked"] is False]
+                跳过章数 = len(官网目录) - len(目录)
+                if not 目录:
+                    yield "这本书暂无可下载的免费章节"
+                    return
+            else:
+                客户端 = 书耽客户端(会话)
+                详情 = await 客户端.详情(书籍编号)
+                目录 = await 客户端.目录(
+                    书籍编号, int(_编号(详情.get("chapter_amount")) or "0"), 末章资料=详情.get("last_chapter_info")
+                )
+                书籍信息 = _书籍资料(详情)
             书籍信息["word_count"] = 格式化小说字数(书籍信息["word_count"])
-            yield 番茄小说.格式化番茄下载提示(书籍信息, len(目录))
+            提示 = 番茄小说.格式化番茄下载提示(书籍信息, len(目录))
+            if 跳过章数:
+                提示 = f"{提示}\n本次仅下载官网免费章节，跳过 {跳过章数} 章。"
+            yield 提示
 
             阶段 = "chapters"
             结果 = await 客户端.下载(书籍编号, 目录)
 
         阶段 = "txt"
         文件名, 内容 = await asyncio.to_thread(番茄小说.生成番茄小说文件内容, 书籍编号, 书籍信息, 目录, 结果)
+        if 跳过章数:
+            文件名 = 文件名.removesuffix(".txt") + " [免费章节].txt"
         路径 = await _异步写入缓存(文件名, 内容)
 
         阶段 = "upload"
@@ -446,7 +805,8 @@ async def 搜索书耽小说(关键词: str, 数量上限: int = 15) -> list[dic
         return []
     上限 = min(15, max(1, int(数量上限)))
     async with _创建书耽会话(1) as 会话:
-        列表 = await 书耽客户端(会话).搜索(关键词, 上限)
+        客户端 = 书耽网页客户端(会话) if _书耽请求凭据 is None else 书耽客户端(会话)
+        列表 = await 客户端.搜索(关键词, 上限)
     结果 = []
     for 书 in 列表:
         if not isinstance(书, dict):

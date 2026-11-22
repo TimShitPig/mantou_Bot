@@ -2884,7 +2884,7 @@ async def 聚合搜索(
         return []
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v28-shubl-source", 书耽账号,
+        tuple(_拆分查询词(关键词)), "search-v29-shubl-web", 书耽账号,
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
