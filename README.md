@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.508-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.509-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.508 |
+| 版本 | v6.1.509 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -124,7 +124,7 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 | 晋江 | Android App 520 版接口、签名和解密；无账号自动用游客，只下载明确免费且未锁章节；登录后仅收入实际可读正文，未解锁付费章跳过 |
 | 话本 | 官方链接、卡片和找书；App 分卷目录包含番外/彩蛋，保留原文图片标记与位置 |
 | 疯狂追书、梧桐 | `疯狂追书 书籍ID`、`梧桐 书籍ID` 或找书结果，身份与开关独立 |
-| 书耽 | `书耽找关键词` 或聚合找书，再发送 `选N`。单本详情、目录、单章正文共用异步会话，最多 200 路正文并发。提示和 TXT 沿用番茄格式。支持 `开书耽` / `关书耽` |
+| 书耽 | 直接发送 `https://www.shubl.com/book/book_detail/书籍ID` 或相应分享卡片，也支持 `书耽找关键词` 后发送 `选N`。单本详情、目录、单章正文共用异步会话，最多 200 路正文并发。提示和 TXT 沿用番茄格式。支持 `开书耽` / `关书耽` |
 | 盐言 / 知乎文章 | `story.zhihu.com`、market 章节链接、`zhuanlan.zhihu.com/p/`、原始 `https://soia.zhihu.com/km_paid_content/share?...` 分享链接及完整 `fetch?url=...` 包装链接；直接发知乎 `/xen/market/remix/paid_column/` 专栏分享页会自动读取完整目录，按顺序下载章节并合成一份 TXT，遇到正在补录的章节会跳过并提示跳过章数。具体章节或文章分享仍按单篇处理；正文提取最多等待 90 秒，连续读取等待 75 秒，失败不立即重试；单章补录或专栏全部章节均在补录时提示“正文正在补录中，请次日查看”；403提示访问受限，429提示请求较多，冷却期内不重复请求 |
 | Z-Library | 找书及公开书籍链接；保存站点提供的 TXT 或官方转换结果，不在本地转换 EPUB/PDF |
 

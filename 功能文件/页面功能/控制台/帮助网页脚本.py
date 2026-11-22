@@ -1006,7 +1006,7 @@
         if ($('novel-test-label')) $('novel-test-label').textContent = novels.test_mode ? '测试模式已开启' : '测试模式未开启';
         $('novel-grid').innerHTML = platforms.map((item) => {
           const entryLabel = item.key === '书耽'
-            ? (item.enabled ? '允许找书和选号下载' : '已关闭书耽找书和下载')
+            ? (item.enabled ? '允许找书和分享链接下载' : '已关闭书耽找书和下载')
             : (item.enabled ? '允许识别链接并进入下载流程' : '当前不会响应此平台链接');
           return `<div class="novel-item ${item.enabled ? 'is-enabled' : 'is-disabled'}"><div class="novel-item-main"><div class="novel-badge">${esc(platformGlyph(item.name))}</div><div class="novel-item-copy"><div class="novel-item-title"><strong>${esc(item.name)}</strong><span class="novel-item-status">${item.enabled ? '已开启' : '已关闭'}</span></div><small>${entryLabel}</small></div></div>${switchHtml(item.key, item.enabled, novels.editable, `切换${item.name}`)}</div>`;
         }).join('') || '<div class="empty">没有可用小说平台</div>';

@@ -23,6 +23,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from 功能文件.管理功能.基础功能 import 文件缓存
+from 功能文件.管理功能.基础功能.消息工具 import 提取书耽详情书号
 from 功能文件.管理功能.小说功能.功能.文本处理 import 格式化小说字数, 去除章节正文重复标题
 from 功能文件.管理功能.小说功能.小说 import 番茄小说
 from 功能文件.管理功能.网盘功能 import 小说网盘
@@ -335,6 +336,11 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
     finally:
         if 路径 is not None:
             文件缓存.删除小说缓存文件(路径)
+
+
+def 获取书耽小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
+    来源 = 书耽来源(提取书耽详情书号(event, 命令文本))
+    return 生成书耽下载回复流(event, 来源, 配置) if 来源 else None
 
 
 async def 搜索书耽小说(关键词: str, 数量上限: int = 15) -> list[dict[str, Any]]:

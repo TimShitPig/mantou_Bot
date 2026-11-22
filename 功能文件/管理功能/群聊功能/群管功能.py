@@ -29,7 +29,7 @@ try:
 except Exception:
     Comp = None
 
-from 功能文件.管理功能.基础功能.消息工具 import 是本地系统消息
+from 功能文件.管理功能.基础功能.消息工具 import 提取书耽详情书号, 是本地系统消息
 from 功能文件.管理功能.基础功能.权限工具 import (
     是QQ官方机器人,
     是群文件清理管理员,
@@ -1254,6 +1254,8 @@ def 是否网盘分享广告消息(event: AstrMessageEvent, 消息文本: str = 
 
 
 def 是否白名单消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
+    if 提取书耽详情书号(event, 消息文本):
+        return True
     if 包含QQ阅读小程序白名单(消息文本):
         return True
     if 包含白名单域名(消息文本):
