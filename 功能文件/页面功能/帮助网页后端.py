@@ -421,22 +421,6 @@ async def _后台刷新消息列表(
         "kind": "text", "secret": False, "default": "215",
         "hint": "默认 215，仅在远端注册表单变更时调整。",
     },
-    "shubl_account": {
-        "category": "shubl_account_settings",
-        "label": "书耽账号（ACCOUNT）",
-        "kind": "secret",
-        "secret": True,
-        "placeholder": "输入 account",
-        "hint": "填写书耽接口的 account，与登录令牌配套使用。",
-    },
-    "shubl_token": {
-        "category": "shubl_account_settings",
-        "label": "书耽登录令牌（TOKEN）",
-        "kind": "secret",
-        "secret": True,
-        "placeholder": "输入 login_token",
-        "hint": "填写书耽接口的 login_token，已保存的值不会回显。",
-    },
     "uc_pan_upload_dir": {
         "category": "uc_pan_settings",
         "label": "UC 上传目录",
@@ -516,7 +500,6 @@ async def _后台刷新消息列表(
 
 配置字段分类显示名 = {
     "qq_reader_api_settings": "QQ 阅读开放接口",
-    "shubl_account_settings": "书耽账号",
     "zlibrary_account_settings": "ZLibrary 账号注册",
     "basic_settings": "权限设置",
     "help_web_settings": "帮助网页",
@@ -768,11 +751,6 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
         if 文本 in {"0", "false", "no", "off", "disabled", "关闭", "关"}:
             return False
         raise ValueError("布尔配置值无效")
-    if 字段名 in {"shubl_account", "shubl_token"}:
-        文本 = 值.strip() if isinstance(值, str) else ""
-        if not 文本 or len(文本) > 4096 or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 文本):
-            raise ValueError("书耽凭据格式无效")
-        return 文本
     if 定义.get("secret"):
         文本 = str(值 or "").strip()
         if not 文本 and not 定义.get("allow_empty"):
@@ -2567,16 +2545,6 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
                 continue
             值 = _校验插件配置字段(字段名, 原值)
             待更新.append((字段名, 定义, 值))
-        书耽待更新 = {
-            字段名 for 字段名, 定义, _ in 待更新
-            if 定义["category"] == "shubl_account_settings"
-        }
-        if 书耽待更新:
-            for 字段名 in ("shubl_account", "shubl_token"):
-                if 字段名 not in 书耽待更新:
-                    已保存 = _读取插件配置值(_当前作用域配置(), "shubl_account_settings", 字段名)
-                    if not isinstance(已保存, str) or not 已保存.strip():
-                        return _控制台错误(400, "请同时填写书耽账号和登录令牌")
         已更新 = []
         阶段 = "写入配置"
         # 先完整校验，再一次性写入，避免同一请求中后续字段失败时留下半套配置。

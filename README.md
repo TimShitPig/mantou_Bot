@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.511-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.512-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.511 |
+| 版本 | v6.1.512 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -136,9 +136,9 @@ AstrBot 插件配置页仅显示启动所需的 **9 项**：插件管理员、�
 
 QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后续任务。账号明确失效时保留账号和选择，当前下载先尝试第三方正文接口；第三方失败后切换匿名上下文，只请求目录明确免费的章节，不借用其他账号。VIP 书按真实会员权限处理，单章付费书仍仅请求允许的免费范围。ZLibrary 已验证账号长期保留，额度为零暂停，网络或认证失败不自动注册替代账号；后台只补查当前页，避免遍历大账号池。
 
-### 书耽账号
+### 书耽下载
 
-同一台 Windows 电脑上的 AstrBot 可以直接读取原脚本 `D:\Tencent\Downloads\shubl - 副本.py` 里的 `ACCOUNT` 和 `TOKEN`。AstrBot 运行在另一台机器时，将原文件放在该机器的 AstrBot 数据目录下 `plugin_data/馒头bot/shubl - 副本.py`，即可直接复用。插件只读取这两个字面量。后台「机器人配置 → 书耽」中已有的机器人专属配置优先，其次使用已有的进程环境变量。机器人用户可以直接发书耽链接或找书选号，生成的 TXT 使用番茄的文件名、声明、书籍信息、章节排版和编码。
+直接发书耽链接或找书选号即可下载。插件自动读取部署机器上原脚本自带的 `ACCOUNT` 和 `TOKEN`。本机 Windows 使用已有的 `D:\Tencent\Downloads\shubl - 副本.py`；异机部署从 AstrBot 数据目录下的 `plugin_data/馒头bot/shubl - 副本.py` 读取原文件。TXT 使用番茄的文件名、声明、书籍信息、章节排版和编码。
 
 ### 晋江账号与扫码
 

@@ -47,7 +47,7 @@ if "_章节限额" not in globals():
 _下载失败 = "下载失败 请重试"
 _发送失败 = "文件发送失败，请稍后再试"
 _章节不可读 = "部分章节当前不可读，无法下载整本"
-_账号未配置 = "书耽账号未配置，请联系管理员"
+_源文件不可用 = "书耽源文件不可用，请联系管理员"
 
 
 class 书耽请求错误(RuntimeError):
@@ -139,21 +139,8 @@ def _读取原脚本书耽凭据() -> tuple[str, str]:
     return "", ""
 
 
-def _读取书耽凭据(配置: Any = None) -> tuple[str, str]:
-    设置 = 配置.get("shubl_account_settings") if isinstance(配置, dict) else None
-    if isinstance(设置, dict):
-        令牌, 账号 = _文本(设置.get("shubl_token")), _文本(设置.get("shubl_account"))
-        if 令牌 or 账号:
-            return 令牌, 账号
-    令牌 = os.environ.get("MANTOU_SHUBL_TOKEN", "").strip()
-    账号 = os.environ.get("MANTOU_SHUBL_ACCOUNT", "").strip()
-    if 令牌 or 账号:
-        return 令牌, 账号
-    return _读取原脚本书耽凭据()
-
-
 def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes] | None:
-    凭据 = _读取书耽凭据(配置)
+    凭据 = _读取原脚本书耽凭据()
     if not all(凭据):
         return None
     指纹 = hashlib.sha256(json.dumps(凭据, ensure_ascii=False).encode("utf-8")).digest()
@@ -161,11 +148,11 @@ def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes] | None:
 
 
 class 书耽客户端:
-    def __init__(self, 会话: aiohttp.ClientSession, 配置: Any = None):
+    def __init__(self, 会话: aiohttp.ClientSession):
         self.会话 = 会话
-        self._令牌, self._账号 = _读取书耽凭据(配置)
+        self._令牌, self._账号 = _读取原脚本书耽凭据()
         if not self._令牌 or not self._账号:
-            raise 书耽请求错误("account_not_configured")
+            raise 书耽请求错误("source_file_unavailable")
 
     async def _请求(self, 接口: str, **字段: Any) -> dict[str, Any]:
         数据 = {
@@ -353,7 +340,7 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
     路径 = None
     try:
         async with _创建书耽会话(书耽正文最大并发数) as 会话:
-            客户端 = 书耽客户端(会话, 配置)
+            客户端 = 书耽客户端(会话)
             详情 = await 客户端.详情(书籍编号)
             目录 = await 客户端.目录(书籍编号, int(_编号(详情.get("chapter_amount")) or "0"))
             书籍信息 = _书籍资料(详情)
@@ -383,8 +370,8 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
                        受控错误.HTTP状态 if 受控错误 else None, 受控错误.业务码 if 受控错误 else None)
         if 受控错误 and 受控错误.原因 == "chapter_unavailable":
             yield _章节不可读
-        elif 受控错误 and 受控错误.原因 == "account_not_configured":
-            yield _账号未配置
+        elif 受控错误 and 受控错误.原因 == "source_file_unavailable":
+            yield _源文件不可用
         else:
             yield _发送失败 if 阶段 in {"upload", "share"} else _下载失败
     finally:
@@ -397,13 +384,13 @@ def 获取书耽小说回复流(event: Any, 命令文本: str, 配置: Any = Non
     return 生成书耽下载回复流(event, 来源, 配置) if 来源 else None
 
 
-async def 搜索书耽小说(关键词: str, 数量上限: int = 15, *, 配置: Any = None) -> list[dict[str, Any]]:
+async def 搜索书耽小说(关键词: str, 数量上限: int = 15) -> list[dict[str, Any]]:
     关键词 = str(关键词 or "").strip()
     if not 关键词:
         return []
     上限 = min(15, max(1, int(数量上限)))
     async with _创建书耽会话(1) as 会话:
-        列表 = await 书耽客户端(会话, 配置).搜索(关键词, 上限)
+        列表 = await 书耽客户端(会话).搜索(关键词, 上限)
     结果 = []
     for 书 in 列表:
         if not isinstance(书, dict):
