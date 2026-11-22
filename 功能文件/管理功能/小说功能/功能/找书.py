@@ -186,6 +186,12 @@ except Exception as exc:
     logger.warning("找书加载梧桐失败：错误类型=%s", type(exc).__name__)
 
 try:
+    from 功能文件.管理功能.小说功能.小说 import 书耽小说
+except Exception as exc:
+    书耽小说 = None
+    logger.warning("找书加载书耽失败：错误类型=%s", type(exc).__name__)
+
+try:
     ZLibrary小说 = importlib.import_module(
         "功能文件.管理功能.小说功能.小说.Z-Library小说"
     )
@@ -223,7 +229,7 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
 找书指定平台 = (
     "番茄", "七猫", "书旗", "QQ阅读", "QQ浏览器", "得间", "点众", "塔读",
     "百度", "小米", "宜搜", "米读", "猫眼", "酷我", "酷匠", "连城", "菠萝包",
-    "晋江", "话本", "疯狂追书", "梧桐", "追书", "西瓜免费小说", "ZLibrary", "疯读", "STV",
+    "晋江", "话本", "疯狂追书", "梧桐", "书耽", "追书", "西瓜免费小说", "ZLibrary", "疯读", "STV",
 )
 指定平台找书正则 = re.compile(
     r"^(" + "|".join(
@@ -2256,6 +2262,20 @@ async def 搜索梧桐(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
+async def 搜索书耽(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+    if 书耽小说 is None:
+        _标记找书平台失败()
+        return []
+    try:
+        return _整理新增平台搜索结果(
+            "书耽", await 书耽小说.搜索书耽小说(关键词, 数量上限=需要数量), 需要数量
+        )
+    except Exception as exc:
+        _标记找书平台失败()
+        logger.debug("找书书耽搜索失败：错误类型=%s", type(exc).__name__)
+        return []
+
+
 def _清理QQ阅读预检缓存() -> None:
     现在 = time.time()
     if len(QQ阅读预检缓存) < 512:
@@ -2396,6 +2416,7 @@ def _平台优先级值(平台: Any) -> int:
         "话本": -7,
         "疯狂追书": -8,
         "梧桐": -8,
+        "书耽": -8,
         "ZLibrary": -8,
         "西瓜免费小说": -9,
         "疯读": -10,
@@ -2629,6 +2650,7 @@ async def _聚合搜索未缓存(
                 ("话本", lambda: 搜索话本(词, 需要数量=数量)),
                 ("疯狂追书", lambda: 搜索疯狂追书(词, 需要数量=数量)),
                 ("梧桐", lambda: 搜索梧桐(词, 需要数量=数量)),
+                ("书耽", lambda: 搜索书耽(词, 需要数量=数量)),
                 ("ZLibrary", lambda: 搜索ZLibrary(词, 需要数量=数量, 配置=配置)),
                 ("疯读", lambda: 搜索疯读(词, 需要数量=数量)),
                 ("STV", lambda: 搜索STV(词, 需要数量=数量)),
@@ -2841,6 +2863,8 @@ async def 聚合搜索(
     搜索类型: str = "auto",
     允许平台: Any = None,
     配置: Any = None,
+    *,
+    指定平台: str = "",
 ) -> list[dict[str, Any]]:
     """搜索结果短缓存，避免重复查询反复等待所有平台响应。"""
     关键词 = 清理搜索关键词(关键词)
@@ -2850,9 +2874,16 @@ async def 聚合搜索(
     if not 缓存键[0]:
         return []
     允许平台集合 = _规范化允许平台(允许平台)
+    书耽已配置 = "书耽" in 允许平台集合 and (
+        书耽小说 is not None and 书耽小说.书耽账号已配置()
+    )
+    if not 书耽已配置 and 指定平台 != "书耽":
+        允许平台集合 = 允许平台集合 - {"书耽"}
+    if not 允许平台集合:
+        return []
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v25-title-contains",
+        tuple(_拆分查询词(关键词)), "search-v26-shubl", 书耽已配置,
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -3248,6 +3279,11 @@ async def 获取找书下载回复流(
         if not 梧桐小说.提取梧桐书籍编号(书籍编号):
             return "下载失败 请重试"
         return 梧桐小说.生成梧桐下载回复流(event, 书籍编号, 配置)
+    if 平台 == "书耽" and 书耽小说 is not None:
+        来源 = 书耽小说.书耽来源(书籍编号)
+        if not 来源:
+            return "下载失败 请重试"
+        return 书耽小说.生成书耽下载回复流(event, 来源, 配置)
     if not 链接:
         return "下载失败 请重试"
     if 平台 == "七猫" and 七猫小说 is not None:
@@ -3337,7 +3373,7 @@ async def _开始找书(
         try:
             结果 = _过滤不可用平台结果(
                 await 聚合搜索(
-                    关键词, 搜索类型, 允许平台=允许平台, 配置=配置,
+                    关键词, 搜索类型, 允许平台=允许平台, 配置=配置, 指定平台=指定平台,
                 ),
                 允许平台,
             )
