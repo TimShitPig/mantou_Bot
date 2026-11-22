@@ -32,6 +32,9 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19V5h4v14m0 0V7h5v12m0 0 1-13 5 1-1 12M3 19h18"/></svg>
                 ZLibrary
               </button>
+              <button id="bot-tab-shubl" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-shubl" tabindex="-1">
+                书耽
+              </button>
               <button id="bot-tab-stv" type="button" role="tab" aria-selected="false" aria-controls="bot-panel-stv" tabindex="-1">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 6v14M3 5c4-1 6 0 9 2 3-2 5-3 9-2v13c-4-1-6 0-9 2-3-2-5-3-9-2z"/></svg>
                 STV
@@ -68,6 +71,12 @@
               </header>
               <div id="zlibrary-account-editor" aria-live="polite"><div class="empty">正在读取账号…</div></div>
               <div id="zlibrary-registration-config-editor" class="config-editor"><div class="empty">正在读取注册配置…</div></div>
+            </section>
+            <section id="bot-panel-shubl" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-shubl" tabindex="0" hidden>
+              <header class="studio-service-head">
+                <div><h3>书耽下载</h3><p>填写现有书耽脚本中的 ACCOUNT 和 TOKEN。首次保存时请一起填写。</p></div>
+              </header>
+              <div id="shubl-account-config-editor" class="config-editor"><div class="empty">正在读取配置…</div></div>
             </section>
             <section id="bot-panel-stv" class="studio-bot-panel" role="tabpanel" aria-labelledby="bot-tab-stv" tabindex="0" hidden>
               <header class="studio-service-head">

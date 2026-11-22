@@ -161,6 +161,25 @@
     },
     "invisible": true
   },
+  "shubl_account_settings": {
+    "description": "书耽账号",
+    "type": "object",
+    "items": {
+      "shubl_account": {
+        "description": "书耽账号 account",
+        "type": "string",
+        "default": "",
+        "invisible": true
+      },
+      "shubl_token": {
+        "description": "书耽登录令牌 login_token",
+        "type": "string",
+        "default": "",
+        "invisible": true
+      }
+    },
+    "invisible": true
+  },
   "database_settings": {
     "description": "数据库配置",
     "type": "object",

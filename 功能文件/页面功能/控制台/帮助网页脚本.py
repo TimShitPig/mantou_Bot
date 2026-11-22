@@ -1029,6 +1029,7 @@
         const configFields = data.config && data.config.fields || [];
         renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
         renderConfigEditor('zlibrary-registration-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'zlibrary_account_settings');
+        renderConfigEditor('shubl-account-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'shubl_account_settings');
         renderConfigEditor('qq-reader-api-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'qq_reader_api_settings');
         renderConfigEditor('database-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'database_settings');
         renderDatabaseStatus(database);
@@ -3671,7 +3672,7 @@
         clearTimeout(toastTimer); $('toast').classList.remove('show'); $('toast').textContent = '';
         if ($('toast').parentElement !== document.body) document.body.appendChild($('toast'));
         document.querySelectorAll('#console-workspace input,#console-workspace textarea,#qq-reader-account-dialog input,#jinjiang-account-dialog input').forEach((node) => { node.value = ''; });
-        for (const id of ['pan-grid','basic-config-editor','zlibrary-registration-config-editor','qq-reader-api-config-editor','database-config-editor']) if ($(id)) $(id).replaceChildren();
+        for (const id of ['pan-grid','basic-config-editor','zlibrary-registration-config-editor','shubl-account-config-editor','qq-reader-api-config-editor','database-config-editor']) if ($(id)) $(id).replaceChildren();
         showNotice(''); showBotPicker(); renderBotProfiles();
         document.querySelectorAll('[data-page]').forEach((node) => { node.hidden = true; });
         for (const url of browserMediaObjectUrls.values()) { try { URL.revokeObjectURL(url); } catch (_) {} }

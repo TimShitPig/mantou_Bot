@@ -2262,13 +2262,13 @@ async def 搜索梧桐(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
-async def 搜索书耽(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
+async def 搜索书耽(关键词: str, *, 需要数量: int = 20, 配置: Any = None) -> list[dict[str, Any]]:
     if 书耽小说 is None:
         _标记找书平台失败()
         return []
     try:
         return _整理新增平台搜索结果(
-            "书耽", await 书耽小说.搜索书耽小说(关键词, 数量上限=需要数量), 需要数量
+            "书耽", await 书耽小说.搜索书耽小说(关键词, 数量上限=需要数量, 配置=配置), 需要数量
         )
     except Exception as exc:
         _标记找书平台失败()
@@ -2650,7 +2650,7 @@ async def _聚合搜索未缓存(
                 ("话本", lambda: 搜索话本(词, 需要数量=数量)),
                 ("疯狂追书", lambda: 搜索疯狂追书(词, 需要数量=数量)),
                 ("梧桐", lambda: 搜索梧桐(词, 需要数量=数量)),
-                ("书耽", lambda: 搜索书耽(词, 需要数量=数量)),
+                ("书耽", lambda: 搜索书耽(词, 需要数量=数量, 配置=配置)),
                 ("ZLibrary", lambda: 搜索ZLibrary(词, 需要数量=数量, 配置=配置)),
                 ("疯读", lambda: 搜索疯读(词, 需要数量=数量)),
                 ("STV", lambda: 搜索STV(词, 需要数量=数量)),
@@ -2874,16 +2874,17 @@ async def 聚合搜索(
     if not 缓存键[0]:
         return []
     允许平台集合 = _规范化允许平台(允许平台)
-    书耽已配置 = "书耽" in 允许平台集合 and (
-        书耽小说 is not None and 书耽小说.书耽账号已配置()
+    书耽账号 = (
+        书耽小说.书耽搜索账号标识(配置)
+        if "书耽" in 允许平台集合 and 书耽小说 is not None else None
     )
-    if not 书耽已配置 and 指定平台 != "书耽":
+    if 书耽账号 is None and 指定平台 != "书耽":
         允许平台集合 = 允许平台集合 - {"书耽"}
     if not 允许平台集合:
         return []
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v26-shubl", 书耽已配置,
+        tuple(_拆分查询词(关键词)), "search-v27-shubl-config", 书耽账号,
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
