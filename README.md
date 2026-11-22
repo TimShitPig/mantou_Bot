@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.513-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.514-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.513 |
+| 版本 | v6.1.514 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -138,9 +138,7 @@ QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后�
 
 ### 书耽下载
 
-直接发书耽链接或找书选号即可下载。插件自动读取部署机器上原脚本自带的 `ACCOUNT` 和 `TOKEN`。本机 Windows 使用已有的 `D:\Tencent\Downloads\shubl - 副本.py`；异机部署从 AstrBot 数据目录下的 `plugin_data/馒头bot/shubl - 副本.py` 读取原文件。TXT 使用番茄的文件名、声明、书籍信息、章节排版和编码。
-
-若提示“书耽源文件不可用”，按后台日志的“源文件状态”检查。容器内 AstrBot 数据目录为 `/AstrBot/data` 时，原文件应在 `/AstrBot/data/plugin_data/馒头bot/shubl - 副本.py`，且 AstrBot 进程有读取权限。文件可读后重新发链接即可。
+插件通过书号请求详情和目录，再按章节 ID 请求正文。私有安装包内置书耽所需的凭据，安装后直接发链接或找书选号。GitHub 安装保留书耽代码，未包含私有凭据的安装不启用书耽请求。TXT 使用番茄的文件名、声明、书籍信息、章节排版和编码。
 
 ### 晋江账号与扫码
 
