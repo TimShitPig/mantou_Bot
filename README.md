@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.516-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.517-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.516 |
+| 版本 | v6.1.517 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -138,7 +138,7 @@ QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后�
 
 ### 书耽下载
 
-从 GitHub 安装后，直接发书耽书籍链接，或发送 `书耽找关键词` 后选号。游客模式下载官网明确开放的免费章节，有锁定章节时会提示跳过数量，文件名标注「免费章节」。同一机器人过去保存的书耽登录态会自动用于下载，按目录读取 App 单章接口确认授权的正文，包括已授权的付费章。某章无权读取时提示无法下载整本。TXT 使用番茄的声明、书籍信息、章节排版和编码。
+从 GitHub 安装后，直接发书耽书籍链接，或发送 `书耽找关键词` 后选号。游客模式下载官网明确开放的免费章节，有锁定章节时会提示跳过数量，文件名标注「免费章节」。同一机器人过去保存的书耽登录态会自动用于下载，按目录执行原脚本的完整 content 流程，使用同一 App 会话读取正文，并处理付费试读时的段落回填；保存返回的全文，终端预览长度不作为正文上限。正文失败时不输出残缺整本。TXT 使用番茄的声明、书籍信息、章节排版和编码。
 
 ### 晋江账号与扫码
 

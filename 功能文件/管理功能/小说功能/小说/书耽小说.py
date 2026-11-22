@@ -1,4 +1,4 @@
-"""书耽官网游客与 App 授权下载。"""
+"""书耽官网游客与 App content 正文下载。"""
 
 from __future__ import annotations
 
@@ -45,6 +45,7 @@ _搜索接口 = "/bookcity/get_filter_search_book_list"
 _详情接口 = "/book/get_info_by_id"
 _目录接口 = "/chapter/get_chapter_list_group_by_division"
 _章节接口 = "/chapter/get_chapter_info"
+_段落接口 = "/chapter/get_paragraph_tsukkomi_list"
 if "_章节限额" not in globals():
     _章节限额 = WeakValueDictionary()
 if "_书耽游客限额" not in globals():
@@ -224,7 +225,7 @@ class 书耽客户端:
         self.会话 = 会话
         self._令牌, self._账号 = 凭据
 
-    async def _请求(self, 接口: str, **字段: Any) -> dict[str, Any]:
+    async def _请求(self, 接口: str, *, _允许空数据: bool = False, **字段: Any) -> dict[str, Any]:
         数据 = {
             "app_signature_md5": _应用签名, "app_version": "4.1.1", "channel": "default",
             **字段, "login_token": self._令牌, "account": self._账号,
@@ -260,6 +261,8 @@ class 书耽客户端:
         if 代码 != "100000":
             raise 书耽请求错误("login_required" if 代码 == "200001" else "business_rejected",
                                业务码=int(代码) if 代码 else None)
+        if _允许空数据 and 结果.get("data") in (None, []):
+            return {}
         if not isinstance(结果.get("data"), dict):
             raise 书耽请求错误("invalid_response")
         return 结果["data"]
@@ -303,7 +306,17 @@ class 书耽客户端:
         _核对书耽目录章数(章节列表, 预期数量, 末章资料)
         return 章节列表
 
-    async def 正文(self, 书籍编号: str, 章节信息: dict[str, Any]) -> str:
+    async def _段落(self, 章节编号: str, 段落索引: int) -> str:
+        数据 = await self._请求(
+            _段落接口, chapter_id=章节编号, paragraph_index=str(段落索引), _允许空数据=True
+        )
+        内容 = 数据.get("paragraph_content") or ""
+        if not isinstance(内容, str):
+            raise 书耽请求错误("invalid_chapter")
+        return 内容
+
+    async def content(self, 书籍编号: str, 章节信息: dict[str, Any]) -> str:
+        """在同一异步会话执行源脚本 content 的正文及段落流程。"""
         章节编号 = _编号(章节信息["chapter_id"])
         数据 = await self._请求(_章节接口, chapter_id=章节编号)
         章 = 数据.get("chapter_info")
@@ -311,16 +324,41 @@ class 书耽客户端:
             raise 书耽请求错误("invalid_chapter")
         if "book_id" in 章 and _编号(章["book_id"]) != 书籍编号:
             raise 书耽请求错误("invalid_chapter")
-        if _数字(章.get("auth_access")) != "1":
-            raise 书耽请求错误("chapter_unavailable")
-        原文 = 章.get("txt_content")
+        原文 = 章.get("txt_content") or ""
         if not isinstance(原文, str):
-            raise 书耽请求错误("empty_chapter")
-        # 原脚本 content 的逐行清洗保留空行和行内空格。
+            raise 书耽请求错误("invalid_chapter")
+        付费试读 = str(章.get("is_paid")) == "1" and (
+            str(章.get("auth_access")) == "0" or len(原文) <= 300
+        )
+        if 付费试读:
+            段落 = {}
+            连续空段 = 0
+            首段 = await self._段落(章节编号, 0)
+            if 首段:
+                段落[0] = 首段
+            索引 = 1
+            while 索引 <= 300 and 连续空段 < 15:
+                本段 = await self._段落(章节编号, 索引)
+                if 本段:
+                    段落[索引] = 本段
+                    连续空段 = 0
+                else:
+                    连续空段 += 1
+                索引 += 1
+            拼接正文 = "\n".join(段落[位置] for 位置 in sorted(段落))
+            if not re.sub(r"\s+", "", 拼接正文):
+                raise 书耽请求错误("chapter_unavailable")
+            原文 = 拼接正文
+        elif _数字(章.get("auth_access")) != "1":
+            raise 书耽请求错误("chapter_unavailable")
+        # 与源脚本一致，保存返回全文；300 字仅是原 CLI 的终端预览上限。
         内容 = "\n".join(行.lstrip("\u3000 ") for 行 in 原文.split("\n"))
         if not 去除章节正文重复标题(章节信息["chapter_title"], 内容):
             raise 书耽请求错误("empty_chapter")
         return 内容
+
+    async def 正文(self, 书籍编号: str, 章节信息: dict[str, Any]) -> str:
+        return await self.content(书籍编号, 章节信息)
 
     async def 下载(self, 书籍编号: str, 目录: list[dict[str, Any]]) -> list[dict[str, Any]]:
         总数 = len(目录)
