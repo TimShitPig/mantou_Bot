@@ -9,6 +9,7 @@ import logging
 import json
 import re
 import threading
+import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
@@ -427,10 +428,14 @@ def 书耽来源(书籍编号: Any) -> str:
     return f"shubl:{编号}" if 编号 else ""
 
 def _书耽书籍状态(书: dict[str, Any]) -> str:
-    状态 = _文本(书.get("up_status"))
+    原始状态 = 书.get("up_status")
+    状态 = _文本(原始状态)
     if 状态 in {"完结", "已完结", "完本"}:
         return "完结"
-    return "连载" if 状态 in {"连载", "连载中"} else "未知"
+    if 状态 in {"连载", "连载中"}:
+        return "连载"
+    # 同书 App 详情与官方网页核对：0 连载，1 完结；其他数值不猜测。
+    return {"0": "连载", "1": "完结"}.get(_数字(原始状态), "未知")
 
 def _书籍资料(书: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -477,6 +482,7 @@ def 获取书耽小说回复流(event: Any, 命令文本: str, 配置: Any = Non
 
 _书耽源指纹 = hashlib.sha256(_书耽原脚本.encode("utf-8")).digest()
 书耽正文最大并发数 = 200
+_书耽进度日志间隔 = 10.0
 if "_书耽线程池" not in globals():
     _书耽线程池 = None
 if "_书耽资源锁" not in globals():
@@ -567,10 +573,10 @@ async def 关闭书耽资源() -> None:
 
 
 def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes]:
-    return 获取当前机器人AppID(配置), _书耽源指纹
+    return 获取当前机器人AppID(配置), hashlib.sha256(_书耽源指纹 + b"up-status-0-1").digest()
 
 
-async def _下载原脚本章节(目录: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _下载原脚本章节(目录: list[dict[str, Any]], *, 书籍编号: str = "") -> list[dict[str, Any]]:
     循环 = asyncio.get_running_loop()
     限额 = _章节限额.get(循环)
     if 限额 is None:
@@ -579,12 +585,30 @@ async def _下载原脚本章节(目录: list[dict[str, Any]]) -> list[dict[str,
     待下载 = iter(enumerate(目录))
     结果 = [{} for _ in 目录]
     已完成 = 0
+    处理中 = 0
+    开始 = time.monotonic()
+
+    def 记录进度() -> None:
+        logger.info(
+            "书耽下载进度：书号=%s，已完成=%s/%s，处理中=%s，等待=%s，用时=%.1f秒",
+            书籍编号, 已完成, len(目录), 处理中,
+            max(0, len(目录) - 已完成 - 处理中), time.monotonic() - 开始,
+        )
+
+    async def 进度心跳() -> None:
+        while True:
+            await asyncio.sleep(_书耽进度日志间隔)
+            记录进度()
 
     async def 工作():
-        nonlocal 已完成
+        nonlocal 已完成, 处理中
         for 序号, 章 in 待下载:
             async with 限额:
-                正文 = await _调用原函数("content", _编号(章.get("chapter_id")))
+                处理中 += 1
+                try:
+                    正文 = await _调用原函数("content", _编号(章.get("chapter_id")))
+                finally:
+                    处理中 -= 1
             if not isinstance(正文, str) or not 正文.strip():
                 raise 书耽请求错误("empty_chapter")
             结果[序号] = {
@@ -592,21 +616,22 @@ async def _下载原脚本章节(目录: list[dict[str, Any]]) -> list[dict[str,
                 "content": 正文, "success": True,
             }
             已完成 += 1
-            if 已完成 == len(目录) or 已完成 % 100 == 0:
-                logger.info("书耽章节进度 %s/%s", 已完成, len(目录))
+            if 已完成 == 1 or 已完成 == len(目录) or 已完成 % 100 == 0:
+                记录进度()
 
     并发数 = min(200, len(目录))
-    logger.info("书耽章节进度 0/%s，工作协程=%s", len(目录), 并发数)
+    logger.info("书耽正文下载开始：书号=%s，章节=%s，工作协程=%s", 书籍编号, len(目录), 并发数)
     任务列表 = [asyncio.create_task(工作()) for _ in range(并发数)]
+    心跳任务 = asyncio.create_task(进度心跳(), name="书耽下载进度")
     try:
         await asyncio.gather(*任务列表)
     finally:
+        心跳任务.cancel()
         for 任务 in 任务列表:
             if not 任务.done():
                 任务.cancel()
-        await asyncio.gather(*任务列表, return_exceptions=True)
+        await asyncio.gather(心跳任务, *任务列表, return_exceptions=True)
     return 结果
-
 
 async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     匹配 = re.fullmatch(r"shubl:([0-9]{1,20})", str(来源 or ""))
@@ -616,6 +641,8 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
         return
     阶段 = "metadata"
     路径 = None
+    开始 = time.monotonic()
+    logger.info("书耽下载任务开始：书号=%s", 书籍编号)
     try:
         详情 = await _调用原函数("book_info", 书籍编号)
         目录 = await _调用原函数("chapter_list", 书籍编号)
@@ -628,23 +655,35 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
                 raise 书耽请求错误("invalid_catalog")
         书籍信息 = _书籍资料(详情)
         书籍信息["word_count"] = 格式化小说字数(书籍信息["word_count"])
+        logger.info("书耽目录加载完成：书号=%s，章节=%s，状态=%s",
+                    书籍编号, len(目录), 书籍信息["status"])
         yield 番茄小说.格式化番茄下载提示(书籍信息, len(目录))
         阶段 = "chapters"
-        结果 = await _下载原脚本章节(目录)
+        结果 = await _下载原脚本章节(目录, 书籍编号=书籍编号)
         阶段 = "txt"
+        logger.info("书耽生成TXT：书号=%s，章节=%s", 书籍编号, len(结果))
         文件名, 内容 = await asyncio.to_thread(番茄小说.生成番茄小说文件内容, 书籍编号, 书籍信息, 目录, 结果)
         路径 = await _异步写入缓存(文件名, 内容)
         阶段 = "upload"
+        logger.info("书耽文件交付开始：书号=%s，字节=%s", 书籍编号, len(内容))
         上传 = await 小说网盘.上传小说并获取分享链接(配置, 路径, 文件名)
         if not 上传.get("success"):
+            logger.warning("书耽文件交付失败：书号=%s，阶段=upload", 书籍编号)
             yield _发送失败
             return
         阶段 = "share"
         发送 = await 小说网盘.发送小说下载结果(event, 书籍信息["title"], 书籍信息["author"], 上传)
         if not 发送.get("sent"):
+            logger.warning("书耽文件交付失败：书号=%s，阶段=share", 书籍编号)
             yield str(发送.get("fallback_text") or _发送失败)
+        else:
+            logger.info("书耽下载完成：书号=%s，章节=%s，用时=%.1f秒",
+                        书籍编号, len(目录), time.monotonic() - 开始)
+    except asyncio.CancelledError:
+        logger.info("书耽下载已取消：书号=%s，阶段=%s", 书籍编号, 阶段)
+        raise
     except Exception as 错误:
-        logger.warning("书耽下载失败：阶段=%s，类型=%s", 阶段, type(错误).__name__)
+        logger.warning("书耽下载失败：书号=%s，阶段=%s，类型=%s", 书籍编号, 阶段, type(错误).__name__)
         yield _发送失败 if 阶段 in {"upload", "share"} else _下载失败
     finally:
         if 路径 is not None:

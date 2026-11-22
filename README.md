@@ -2,14 +2,14 @@
 
 适用于 AstrBot **QQ 官方机器人**的小说下载、网盘分享与群聊管理插件，提供独立网页控制台和 QQ 阅读开放 API。
 
-![version](https://img.shields.io/badge/version-v6.1.518-2ea44f)
+![version](https://img.shields.io/badge/version-v6.1.519-2ea44f)
 ![AstrBot](https://img.shields.io/badge/AstrBot-plugin-4a90d9)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 | 项目 | 内容 |
 | --- | --- |
 | 作者 | 馒头 |
-| 版本 | v6.1.518 |
+| 版本 | v6.1.519 |
 | 仓库 | [TimShitPig/mantou_Bot](https://github.com/TimShitPig/mantou_Bot) |
 | 消息适配器 | 仅 QQ 官方（`qq_official` / `qqofficial`） |
 | 持久化 | MySQL；未配置时部分功能仅保留当前进程状态 |
@@ -138,7 +138,7 @@ QQ 阅读任务绑定开始时选中的启用账号；切换账号只影响后�
 
 ### 书耽下载
 
-直接发送书耽书籍链接，或发送「书耽找关键词」后选号。模块完整保留原脚本及其账号、请求和下载函数。适配层仅调用 book_info、chapter_list 和 content，完整目录全部进入下载；正文使用原函数的默认参数和完整返回值。最多 200 路线程调度，每个线程复用原脚本 Session，请求和重试保持不变。TXT 使用番茄的声明、书籍信息、章节排版和编码。
+直接发送书耽书籍链接，或发送「书耽找关键词」后选号。模块完整保留原脚本及其账号、请求和下载函数。适配层仅调用 book_info、chapter_list 和 content，完整目录全部进入下载；正文使用原函数的默认参数和完整返回值。最多 200 路线程调度，每个线程复用原脚本 Session，请求和重试保持不变。书籍状态按官方 up_status 显示：0 连载、1 完结，其他未知；下载后台记录任务、目录、TXT 和交付阶段，正文每 10 秒输出已完成、处理中、等待数量和用时，首章完成立即记录。TXT 使用番茄的声明、书籍信息、章节排版和编码。
 
 ### 晋江账号与扫码
 
