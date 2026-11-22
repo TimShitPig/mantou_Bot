@@ -204,7 +204,11 @@ class 书耽客户端:
             raise 书耽请求错误("invalid_chapter")
         if _数字(章.get("auth_access")) != "1":
             raise 书耽请求错误("chapter_unavailable")
-        内容 = _文本(章.get("txt_content"))
+        原文 = 章.get("txt_content")
+        if not isinstance(原文, str):
+            raise 书耽请求错误("empty_chapter")
+        # 原脚本 content 的逐行清洗保留空行和行内空格。
+        内容 = "\n".join(行.lstrip("\u3000 ") for 行 in 原文.split("\n"))
         if not 去除章节正文重复标题(章节信息["chapter_title"], 内容):
             raise 书耽请求错误("empty_chapter")
         return 内容
