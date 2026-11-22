@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import html
 import json
 import re
@@ -29,7 +28,7 @@ except ImportError:
 
 from 功能文件.管理功能.基础功能 import 文件缓存
 from 功能文件.管理功能.基础功能.消息工具 import 读取字段
-from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
+from 功能文件.管理功能.基础功能.机器人作用域 import 获取事件机器人AppID, 获取当前机器人AppID, 规范化机器人AppID
 from 功能文件.管理功能.小说功能.功能.文本处理 import 格式化小说字数, 去除章节正文重复标题
 from 功能文件.管理功能.小说功能.小说 import 番茄小说
 from 功能文件.管理功能.网盘功能 import 小说网盘
@@ -54,8 +53,6 @@ if "_书耽游客限额" not in globals():
 _下载失败 = "下载失败 请重试"
 _发送失败 = "文件发送失败，请稍后再试"
 _章节不可读 = "部分章节当前不可读，无法下载整本"
-_书耽请求凭据: tuple[str, str] | None = None
-_书耽未启用 = "书耽下载暂不可用，请联系管理员"
 
 
 class 书耽请求错误(RuntimeError):
@@ -184,12 +181,24 @@ def _创建书耽会话(连接数: int) -> aiohttp.ClientSession:
     )
 
 
+def _已保存书耽凭据(event: Any, 配置: Any) -> tuple[str, str] | None:
+    机器人ID = 获取事件机器人AppID(event)
+    if not 机器人ID or not isinstance(配置, dict):
+        return None
+    if 规范化机器人AppID(配置.get("__mantou_bot_appid__")) != 机器人ID:
+        return None
+    设置 = 配置.get("shubl_account_settings")
+    if not isinstance(设置, dict):
+        return None
+    令牌, 账号 = 设置.get("shubl_token"), 设置.get("shubl_account")
+    if not isinstance(令牌, str) or not isinstance(账号, str):
+        return None
+    令牌, 账号 = 令牌.strip(), 账号.strip()
+    return (令牌, 账号) if 令牌 and 账号 else None
+
+
 def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes]:
-    凭据 = _书耽请求凭据
-    if 凭据 is None:
-        return 获取当前机器人AppID(配置), b"public-web"
-    指纹 = hashlib.sha256(json.dumps(凭据, ensure_ascii=False).encode("utf-8")).digest()
-    return 获取当前机器人AppID(配置), 指纹
+    return 获取当前机器人AppID(配置), b"public-web"
 
 
 def _核对书耽目录章数(目录: list[dict[str, Any]], 预期数量: int, 末章资料: Any) -> None:
@@ -211,11 +220,9 @@ class 书耽客户端:
     正文并发数 = 书耽正文最大并发数
     正文限额 = _章节限额
 
-    def __init__(self, 会话: aiohttp.ClientSession):
+    def __init__(self, 会话: aiohttp.ClientSession, 凭据: tuple[str, str]):
         self.会话 = 会话
-        if _书耽请求凭据 is None:
-            raise 书耽请求错误("shubl_unavailable")
-        self._令牌, self._账号 = _书耽请求凭据
+        self._令牌, self._账号 = 凭据
 
     async def _请求(self, 接口: str, **字段: Any) -> dict[str, Any]:
         数据 = {
@@ -735,11 +742,11 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
     阶段 = "metadata"
     路径 = None
     try:
-        游客 = _书耽请求凭据 is None
-        并发数 = _书耽游客并发数 if 游客 else 书耽正文最大并发数
+        凭据 = _已保存书耽凭据(event, 配置)
+        并发数 = _书耽游客并发数 if 凭据 is None else 书耽正文最大并发数
         跳过章数 = 0
         async with _创建书耽会话(并发数) as 会话:
-            if 游客:
+            if 凭据 is None:
                 客户端 = 书耽网页客户端(会话)
                 书籍信息, 官网目录 = await 客户端.详情和目录(书籍编号)
                 目录 = [章 for 章 in 官网目录 if 章["locked"] is False]
@@ -748,7 +755,7 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
                     yield "这本书暂无可下载的免费章节"
                     return
             else:
-                客户端 = 书耽客户端(会话)
+                客户端 = 书耽客户端(会话, 凭据)
                 详情 = await 客户端.详情(书籍编号)
                 目录 = await 客户端.目录(
                     书籍编号, int(_编号(详情.get("chapter_amount")) or "0"), 末章资料=详情.get("last_chapter_info")
@@ -785,8 +792,6 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
                        受控错误.HTTP状态 if 受控错误 else None, 受控错误.业务码 if 受控错误 else None)
         if 受控错误 and 受控错误.原因 == "chapter_unavailable":
             yield _章节不可读
-        elif 受控错误 and 受控错误.原因 == "shubl_unavailable":
-            yield _书耽未启用
         else:
             yield _发送失败 if 阶段 in {"upload", "share"} else _下载失败
     finally:
@@ -805,7 +810,7 @@ async def 搜索书耽小说(关键词: str, 数量上限: int = 15) -> list[dic
         return []
     上限 = min(15, max(1, int(数量上限)))
     async with _创建书耽会话(1) as 会话:
-        客户端 = 书耽网页客户端(会话) if _书耽请求凭据 is None else 书耽客户端(会话)
+        客户端 = 书耽网页客户端(会话)
         列表 = await 客户端.搜索(关键词, 上限)
     结果 = []
     for 书 in 列表:
