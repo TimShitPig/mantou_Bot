@@ -171,13 +171,34 @@ class _原脚本进程:
                 pass
 
     def _写入(self) -> None:
+        held = None
         try:
             while True:
-                message = self.outgoing.get()
+                message = held if held is not None else self.outgoing.get()
+                held = None
                 if message is None:
                     return
-                self.process.stdin.write(message)
+                batch = [message]
+                size = len(message)
+                stopping = False
+                # 只合并已排队的完整行，不等待攒批；单条大记录仍可独立写入。
+                while len(batch) < 32 and size < 64 * 1024:
+                    try:
+                        following = self.outgoing.get_nowait()
+                    except queue.Empty:
+                        break
+                    if following is None:
+                        stopping = True
+                        break
+                    if size + len(following) > 64 * 1024:
+                        held = following
+                        break
+                    batch.append(following)
+                    size += len(following)
+                self.process.stdin.write(b"".join(batch))
                 self.process.stdin.flush()
+                if stopping:
+                    return
         except (OSError, ValueError):
             self._故障()
 
@@ -295,7 +316,7 @@ def 创建平台同步调用(platform: str, max_workers: int = 32) -> Callable[.
     return 调用
 
 
-async def _排空结果(future: Future[Any]) -> tuple[Any, asyncio.CancelledError | None]:
+async def _排空结果(future: Future[Any], on_cancel: Callable[[], None] | None = None) -> tuple[Any, asyncio.CancelledError | None]:
     """保留调用者取消，取回已经准入的同步工作结果供资源清理使用。"""
     wrapped = asyncio.wrap_future(future)
     cancelled = None
@@ -304,6 +325,8 @@ async def _排空结果(future: Future[Any]) -> tuple[Any, asyncio.CancelledErro
             await asyncio.shield(wrapped)
         except asyncio.CancelledError as exc:
             cancelled = exc
+            if on_cancel is not None:
+                on_cancel()
         except Exception:
             break
     try:
@@ -402,18 +425,84 @@ async def _等待原调用(future: Future[Any]) -> Any:
         raise
 
 
+def _准备原脚本调用(
+    platform: str, state: dict[str, Any], source: str, workers: int,
+    name: str, args: tuple[Any, ...], cancelled: threading.Event,
+) -> Future[Any] | None:
+    try:
+        if cancelled.is_set():
+            return None
+        process = _取得原脚本进程(platform, state, source, workers)
+        with _资源锁:
+            if not _接受调用 or state["raw_closed"] or _平台状态.get(platform) is not state:
+                raise 平台执行错误("service_stopped")
+            state["raw_source_object"] = source
+            state["raw_source_process"] = process
+            if cancelled.is_set():
+                return None
+            # 与进程取得同属控制队列的一次操作，避免后续换源先关闭句柄。
+            return process.提交(name, args)
+    finally:
+        with _资源锁:
+            state["raw_slow_pending"] -= 1
+
+
 async def 运行原脚本(platform: str, source: str, name: str, args: tuple[Any, ...], max_workers: int = 200) -> Any:
     platform, workers = _平台名称(platform), _工作数(max_workers)
     if not isinstance(source, str) or not isinstance(name, str) or not name.isidentifier() or not isinstance(args, (tuple, list)):
         raise 平台执行错误("invalid_input", "ScriptCall")
     state = _状态(platform)
+    future = None
+    start = None
+    cancelled = None
     with _资源锁:
         if state["raw_closed"]:
             raise 平台执行错误("service_stopped")
-        control = _控制执行器(state)
-        start = control.submit(_取得原脚本进程, platform, state, source, workers)
-    process = await _等待原调用(start)
-    return await _等待原调用(process.提交(name, tuple(args)))
+        process = state["process"]
+        if (
+            not state.get("raw_slow_pending", 0)
+            and process is not None
+            and state.get("raw_source_object") is source
+            and state.get("raw_source_process") is process
+            and process.workers == workers
+            and process.可用()
+        ):
+            future = process.提交(name, tuple(args))
+        else:
+            control = _控制执行器(state)
+            cancelled = threading.Event()
+            state["raw_slow_pending"] = state.get("raw_slow_pending", 0) + 1
+            try:
+                start = control.submit(
+                    _准备原脚本调用, platform, state, source, workers,
+                    name, tuple(args), cancelled,
+                )
+            except BaseException:
+                state["raw_slow_pending"] -= 1
+                raise
+    if future is not None:
+        return await _等待原调用(future)
+
+    def cancel_preparation() -> None:
+        with _资源锁:
+            cancelled.set()
+
+    future, preparing_cancel = await _排空结果(start, cancel_preparation)
+    if future is None:
+        if preparing_cancel is not None:
+            raise preparing_cancel
+        raise 平台执行错误("call_cancelled")
+    try:
+        result, running_cancel = await _排空结果(future)
+    except BaseException:
+        if preparing_cancel is not None:
+            raise preparing_cancel from None
+        raise
+    if preparing_cancel is not None:
+        raise preparing_cancel
+    if running_cancel is not None:
+        raise running_cancel
+    return result
 
 
 def _关闭状态原脚本(state: dict[str, Any]) -> None:

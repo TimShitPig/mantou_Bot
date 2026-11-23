@@ -673,6 +673,22 @@ async def _下载原脚本章节(目录: list[dict[str, Any]], *, 书籍编号: 
     return 结果
 
 
+async def _获取书耽书籍元数据(书籍编号: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """详情和目录只依赖书号，共用原函数并行读取并统一收尾。"""
+    任务列表 = [
+        asyncio.create_task(_调用原函数("book_info", 书籍编号)),
+        asyncio.create_task(_调用原函数("chapter_list", 书籍编号)),
+    ]
+    try:
+        详情, 目录 = await asyncio.gather(*任务列表)
+        return 详情, 目录
+    finally:
+        for 任务 in 任务列表:
+            if not 任务.done():
+                任务.cancel()
+        await asyncio.gather(*任务列表, return_exceptions=True)
+
+
 async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     匹配 = re.fullmatch(r"shubl:([0-9]{1,20})", str(来源 or ""))
     书籍编号 = _编号(匹配[1]) if 匹配 else ""
@@ -684,8 +700,7 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
     开始 = time.monotonic()
     logger.info("书耽下载任务开始：书号=%s", 书籍编号)
     try:
-        详情 = await _调用原函数("book_info", 书籍编号)
-        目录 = await _调用原函数("chapter_list", 书籍编号)
+        详情, 目录 = await _获取书耽书籍元数据(书籍编号)
         if not isinstance(详情, dict) or not isinstance(目录, list) or not 目录:
             raise 书耽请求错误("invalid_metadata")
         if _编号(详情.get("book_id")) != 书籍编号:
