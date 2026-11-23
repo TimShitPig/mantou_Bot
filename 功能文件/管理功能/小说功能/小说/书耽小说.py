@@ -478,11 +478,16 @@ def 获取书耽小说回复流(event: Any, 命令文本: str, 配置: Any = Non
 
 _书耽源指纹 = hashlib.sha256(_书耽原脚本.encode("utf-8")).digest()
 书耽正文最大并发数 = 200
+_书耽段落并发数 = 8
+_书耽段落最大索引 = 300
+_书耽连续空段上限 = 15
 _书耽进度日志间隔 = 10.0
 if "_书耽已关闭" not in globals():
     _书耽已关闭 = False
 if "_章节限额" not in globals():
     _章节限额 = WeakValueDictionary()
+if "_书耽请求限额" not in globals():
+    _书耽请求限额 = WeakValueDictionary()
 
 _下载失败 = "下载失败 请重试"
 _发送失败 = "文件发送失败，请稍后再试"
@@ -495,23 +500,74 @@ class 书耽请求错误(RuntimeError):
 async def _调用原函数(名称: str, *参数: Any) -> Any:
     if _书耽已关闭:
         raise 书耽请求错误("service_stopped")
-    任务 = asyncio.create_task(运行原脚本(
-        "书耽", _书耽原脚本, 名称, 参数, max_workers=书耽正文最大并发数
-    ))
-    try:
-        return await asyncio.shield(任务)
-    except asyncio.CancelledError:
-        # 原函数仍在专属进程内执行，等待结果后结束当前项目任务。
-        while not 任务.done():
+    循环 = asyncio.get_running_loop()
+    限额 = _书耽请求限额.get(循环)
+    if 限额 is None:
+        限额 = asyncio.Semaphore(书耽正文最大并发数)
+        _书耽请求限额[循环] = 限额
+    # 与章节额度分开，避免所有章节持有额度后互相等待段落请求。
+    async with 限额:
+        if _书耽已关闭:
+            raise 书耽请求错误("service_stopped")
+        任务 = asyncio.create_task(运行原脚本(
+            "书耽", _书耽原脚本, 名称, 参数, max_workers=书耽正文最大并发数
+        ))
+        try:
+            return await asyncio.shield(任务)
+        except asyncio.CancelledError:
+            # 原请求结束前继续占用额度，防止取消时放行另一批请求。
+            while not 任务.done():
+                try:
+                    await asyncio.shield(任务)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not 任务.cancelled():
+                任务.exception()
+            raise
+
+
+async def _获取书耽章节正文(章节编号: str) -> str:
+    """使用原请求函数并发取段，保持原 content 的拼接和停止规则。"""
+    信息 = await _调用原函数("chapter_info", 章节编号)
+    正文 = 信息.get("txt_content") or ""
+    if str(信息.get("is_paid")) == "1" and (
+        str(信息.get("auth_access")) == "0" or len(正文) <= 300
+    ):
+        段落 = {}
+        首段 = await _调用原函数("paragraph", 章节编号, 0)
+        if 首段:
+            段落[0] = 首段
+        索引 = 1
+        连续空段 = 0
+        while 索引 <= _书耽段落最大索引 and 连续空段 < _书耽连续空段上限:
+            # 缩小尾部窗口，不越过原脚本连续 15 个空段的停止点。
+            数量 = min(
+                _书耽段落并发数, _书耽连续空段上限 - 连续空段,
+                _书耽段落最大索引 - 索引 + 1,
+            )
+            任务列表 = [asyncio.create_task(_调用原函数("paragraph", 章节编号, i))
+                      for i in range(索引, 索引 + 数量)]
             try:
-                await asyncio.shield(任务)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        if not 任务.cancelled():
-            任务.exception()
-        raise
+                内容列表 = await asyncio.gather(*任务列表)
+            finally:
+                for 任务 in 任务列表:
+                    if not 任务.done():
+                        任务.cancel()
+                await asyncio.gather(*任务列表, return_exceptions=True)
+            for i, 内容 in enumerate(内容列表, 索引):
+                if 内容:
+                    段落[i] = 内容
+                    连续空段 = 0
+                else:
+                    连续空段 += 1
+            索引 += 数量
+        if 段落:
+            全文 = "\n".join(段落[i] for i in sorted(段落))
+            if re.sub(r"\s+", "", 全文):
+                正文 = 全文
+    return "\n".join(行.lstrip("\u3000 ") for 行 in 正文.split("\n"))
 
 
 def 启动书耽资源() -> None:
@@ -567,7 +623,7 @@ async def _下载原脚本章节(目录: list[dict[str, Any]], *, 书籍编号: 
             async with 限额:
                 处理中 += 1
                 try:
-                    正文 = await _调用原函数("content", _编号(章.get("chapter_id")))
+                    正文 = await _获取书耽章节正文(_编号(章.get("chapter_id")))
                 finally:
                     处理中 -= 1
             if not isinstance(正文, str) or not 正文.strip():
