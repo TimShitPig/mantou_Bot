@@ -529,40 +529,54 @@ async def _调用原函数(名称: str, *参数: Any) -> Any:
 
 
 async def _获取书耽章节正文(章节编号: str) -> str:
-    """使用原请求函数并发取段，保持原 content 的拼接和停止规则。"""
+    """使用原请求函数滑动取段，保持原 content 的拼接和停止规则。"""
     信息 = await _调用原函数("chapter_info", 章节编号)
     正文 = 信息.get("txt_content") or ""
     if str(信息.get("is_paid")) == "1" and (
         str(信息.get("auth_access")) == "0" or len(正文) <= 300
     ):
         段落 = {}
-        首段 = await _调用原函数("paragraph", 章节编号, 0)
-        if 首段:
-            段落[0] = 首段
-        索引 = 1
+        待拼接 = {}
+        任务列表 = {}
+        索引 = 0
+        下一索引 = 0
         连续空段 = 0
-        while 索引 <= _书耽段落最大索引 and 连续空段 < _书耽连续空段上限:
-            # 缩小尾部窗口，不越过原脚本连续 15 个空段的停止点。
-            数量 = min(
-                _书耽段落并发数, _书耽连续空段上限 - 连续空段,
-                _书耽段落最大索引 - 索引 + 1,
-            )
-            任务列表 = [asyncio.create_task(_调用原函数("paragraph", 章节编号, i))
-                      for i in range(索引, 索引 + 数量)]
-            try:
-                内容列表 = await asyncio.gather(*任务列表)
-            finally:
-                for 任务 in 任务列表:
-                    if not 任务.done():
-                        任务.cancel()
-                await asyncio.gather(*任务列表, return_exceptions=True)
-            for i, 内容 in enumerate(内容列表, 索引):
-                if 内容:
-                    段落[i] = 内容
-                    连续空段 = 0
-                else:
-                    连续空段 += 1
-            索引 += 数量
+        try:
+            while 索引 <= _书耽段落最大索引 and 连续空段 < _书耽连续空段上限:
+                # 未知段落即使全为空，也不能越过原脚本最早可能的停止点。
+                最后可请求 = min(
+                    _书耽段落最大索引,
+                    max(1, 索引) + _书耽连续空段上限 - 连续空段 - 1,
+                )
+                while len(任务列表) < _书耽段落并发数 and 下一索引 <= 最后可请求:
+                    任务列表[下一索引] = asyncio.create_task(
+                        _调用原函数("paragraph", 章节编号, 下一索引)
+                    )
+                    下一索引 += 1
+                if not 任务列表:
+                    break
+                完成, _ = await asyncio.wait(
+                    任务列表.values(), return_when=asyncio.FIRST_COMPLETED,
+                )
+                for i, 任务 in list(任务列表.items()):
+                    if 任务 in 完成:
+                        del 任务列表[i]
+                        待拼接[i] = 任务.result()
+                while 索引 in 待拼接:
+                    内容 = 待拼接.pop(索引)
+                    if 内容:
+                        段落[索引] = 内容
+                        连续空段 = 0
+                    elif 索引:
+                        连续空段 += 1
+                    索引 += 1
+                    if 连续空段 >= _书耽连续空段上限:
+                        break
+        finally:
+            for 任务 in 任务列表.values():
+                if not 任务.done():
+                    任务.cancel()
+            await asyncio.gather(*任务列表.values(), return_exceptions=True)
         if 段落:
             全文 = "\n".join(段落[i] for i in sorted(段落))
             if re.sub(r"\s+", "", 全文):
