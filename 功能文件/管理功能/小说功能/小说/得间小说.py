@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用
+
+_平台同步调用 = 创建平台同步调用('得间')
+
 import asyncio
 import base64
 import hashlib
@@ -452,7 +456,7 @@ async def _异步执行得间解密(解密函数: Callable, *参数: Any) -> Any
     assert 信号量 is not None
     try:
         async with 信号量:
-            任务 = await asyncio.to_thread(执行器.submit, 解密函数, *参数)
+            任务 = await _平台同步调用(执行器.submit, 解密函数, *参数)
             return await asyncio.wrap_future(任务, loop=循环)
     except BrokenProcessPool:
         if 得间解密执行器 is 执行器:
@@ -1275,7 +1279,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
             yield "下载失败 请重试"
             return
 
-        文件名, 文件内容 = await asyncio.to_thread(
+        文件名, 文件内容 = await _平台同步调用(
             生成小说文件, 书籍编号, 书名, 作者, 状态, 字数, 章节结果
         )
         if not 已确认数量:
@@ -1574,7 +1578,7 @@ async def 准备发送文本文件(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    缓存路径 = await asyncio.to_thread(写入缓存, 文件名, 文件内容)
+    缓存路径 = await _平台同步调用(写入缓存, 文件名, 文件内容)
     if 小说网盘 is None:
         删除缓存(缓存路径)
         return {

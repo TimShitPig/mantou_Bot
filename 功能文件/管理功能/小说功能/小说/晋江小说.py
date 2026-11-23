@@ -6,6 +6,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('晋江')
+
 import asyncio
 import base64
 import binascii
@@ -44,6 +48,8 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('晋江', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     已配置运行状态数据库,
@@ -1033,7 +1039,7 @@ async def 下载晋江正文(
     if 需要核实身份 and 凭据 and 配置 is not None:
         # 1004 在章节接口也表示无权限；必须另行调用只读身份接口再决定是否失效。
         资料 = await 查询晋江账号资料(凭据)
-        await asyncio.to_thread(合并晋江账号资料, 配置, dict(凭据), 资料)
+        await _平台同步调用(合并晋江账号资料, 配置, dict(凭据), 资料)
     output = [item for item in results if item is not None and item.get("success")]
     if any(item is None for item in results) or errors:
         first = errors[0] if errors else None
@@ -1095,17 +1101,22 @@ def 生成晋江小说文件内容(
 
 
 def 写入晋江下载缓存文件(文件名: str, 内容: bytes) -> Path:
-    晋江小说缓存目录.mkdir(parents=True, exist_ok=True)
-    path = 晋江小说缓存目录 / Path(_清理文件名(文件名)).name
-    if path.exists():
-        for index in range(1, 1000):
-            candidate = 晋江小说缓存目录 / f"{path.stem}_{index}{path.suffix}"
-            if not candidate.exists():
-                path = candidate
-                break
-    path.write_bytes(内容)
-    文件缓存工具.标记小说缓存正在使用(path)
-    return path
+    for _缓存写入重试 in range(1000):
+        try:
+            晋江小说缓存目录.mkdir(parents=True, exist_ok=True)
+            path = 晋江小说缓存目录 / Path(_清理文件名(文件名)).name
+            if path.exists():
+                for index in range(1, 1000):
+                    candidate = 晋江小说缓存目录 / f"{path.stem}_{index}{path.suffix}"
+                    if not candidate.exists():
+                        path = candidate
+                        break
+            文件缓存工具.独占写入小说缓存(path, 内容)
+            文件缓存工具.标记小说缓存正在使用(path)
+            return path
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def 删除晋江缓存文件(path: Any) -> None:
@@ -1122,7 +1133,7 @@ async def 准备发送晋江文本文件(
     书名: str,
     作者: str,
 ) -> dict[str, Any]:
-    path = 写入晋江下载缓存文件(文件名, 内容)
+    path = await _平台缓存调用(写入晋江下载缓存文件,文件名, 内容)
     if 小说网盘 is None:
         删除晋江缓存文件(path)
         return {"sent": False, "fallback_text": "", "source_cache_path": None}
@@ -1195,7 +1206,7 @@ async def 生成晋江下载回复流(
         from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 
         appid = str(获取当前机器人AppID(配置) or "")
-        当前凭据 = await asyncio.to_thread(读取晋江账号凭据, 配置) if re.fullmatch(r"[0-9]+", appid) else None
+        当前凭据 = await _平台同步调用(读取晋江账号凭据, 配置) if re.fullmatch(r"[0-9]+", appid) else None
         凭据 = dict(当前凭据) if isinstance(当前凭据, Mapping) else None
         async with 创建晋江HTTP会话() as session:
             详情, 全部目录 = await asyncio.gather(
@@ -1272,7 +1283,7 @@ async def 生成晋江下载回复流(
             已读取 = {item["id"] for item in 章节结果}
             可下载目录 = [item for item in 可下载目录 if item["id"] in 已读取]
             详情["catalog_chapter_count"] = len(全部目录)
-        文件名, 内容 = 生成晋江小说文件内容(书籍编号, 详情, 可下载目录, 章节结果)
+        文件名, 内容 = await _平台同步调用(生成晋江小说文件内容,书籍编号, 详情, 可下载目录, 章节结果)
         发送结果 = await 准备发送晋江文本文件(
             event,
             文件名,

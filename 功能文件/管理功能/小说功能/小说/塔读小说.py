@@ -640,6 +640,11 @@ except Exception as exc:
     logger.warning("塔读小说百度网盘模块加载失败：错误类型=%s", type(exc).__name__)
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('塔读')
+_平台缓存调用 = 创建平台缓存调用('塔读', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 小说缓存目录 = 文件缓存工具.小说缓存目录
@@ -1442,15 +1447,20 @@ def _生成小说文件(
 
 
 def _写入缓存(file_name: str, content: bytes) -> Path:
-    小说缓存目录.mkdir(parents=True, exist_ok=True)
-    path = 小说缓存目录 / file_name
-    index = 1
-    while path.exists():
-        path = 小说缓存目录 / f"{Path(file_name).stem}_{index}.txt"
-        index += 1
-    path.write_bytes(content)
-    文件缓存工具.标记小说缓存正在使用(path)
-    return path
+    for _缓存写入重试 in range(1000):
+        try:
+            小说缓存目录.mkdir(parents=True, exist_ok=True)
+            path = 小说缓存目录 / file_name
+            index = 1
+            while path.exists():
+                path = 小说缓存目录 / f"{Path(file_name).stem}_{index}.txt"
+                index += 1
+            文件缓存工具.独占写入小说缓存(path, content)
+            文件缓存工具.标记小说缓存正在使用(path)
+            return path
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def _删除缓存(path: Any) -> None:
@@ -1462,7 +1472,7 @@ def _删除缓存(path: Any) -> None:
 async def _准备发送文本文件(
     event: Any, file_name: str, content: bytes, config: Any, *, title: str, author: str
 ) -> dict[str, Any]:
-    cache_path = _写入缓存(file_name, content)
+    cache_path = await _平台缓存调用(_写入缓存,file_name, content)
     if 小说网盘 is None:
         _删除缓存(cache_path)
         return {
@@ -1607,7 +1617,7 @@ async def 生成塔读下载回复流(
             )
             yield "下载失败 请重试"
             return
-        file_name, content = _生成小说文件(
+        file_name, content = await _平台同步调用(_生成小说文件,
             book_id, title, author, status, word_count, chapter_results
         )
         send_result = await _准备发送文本文件(

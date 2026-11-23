@@ -34,6 +34,11 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('盐言')
+_平台缓存调用 = 创建平台缓存调用('盐言', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 外部提取地址 = "http://154.12.91.167:17324/extract"
 知乎分享提取地址 = "http://103.236.77.248:32838/fetch"
@@ -758,7 +763,7 @@ async def 生成下载回复流(event: Any, 来源: str, 配置: Any = None) -> 
                 raise RuntimeError("盐言章节正文不完整")
             阶段 = "txt_assemble"
             yield 格式化下载提示(书籍)
-            文件名, 文件内容 = 生成小说文件内容(书籍)
+            文件名, 文件内容 = await _平台同步调用(生成小说文件内容,书籍)
             logger.info(
                 f"盐言小说章节下载完成：业务编号={书籍.get('column_id')}, "
                 f"成功={len(章节)}, 补录跳过={跳过章数}, 总数={预期章数}, 字数={书籍.get('word_count')}, "
@@ -868,7 +873,7 @@ async def 准备发送文本文件(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    缓存路径 = 写入缓存(文件名, 文件内容)
+    缓存路径 = await _平台缓存调用(写入缓存,文件名, 文件内容)
     if 小说网盘 is None:
         删除缓存(缓存路径)
         return {
@@ -950,18 +955,23 @@ def 启动百度后台上传并清理(配置: Any, 源缓存路径: Any, 文件�
 
 
 def 写入缓存(文件名: str, 文件内容: bytes) -> Path:
-    小说缓存目录.mkdir(parents=True, exist_ok=True)
-    基础名 = Path(清理文件名(文件名)).name or "盐言文章.txt"
-    if not 基础名.lower().endswith(".txt"):
-        基础名 += ".txt"
-    路径 = 小说缓存目录 / 基础名
-    for 序号 in range(1000):
-        候选 = 路径 if 序号 == 0 else 小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
-        if not 候选.exists():
-            候选.write_bytes(文件内容)
-            文件缓存工具.标记小说缓存正在使用(候选)
-            return 候选
-    raise RuntimeError("下载缓存文件过多")
+    for _缓存写入重试 in range(1000):
+        try:
+            小说缓存目录.mkdir(parents=True, exist_ok=True)
+            基础名 = Path(清理文件名(文件名)).name or "盐言文章.txt"
+            if not 基础名.lower().endswith(".txt"):
+                基础名 += ".txt"
+            路径 = 小说缓存目录 / 基础名
+            for 序号 in range(1000):
+                候选 = 路径 if 序号 == 0 else 小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
+                if not 候选.exists():
+                    文件缓存工具.独占写入小说缓存(候选, 文件内容)
+                    文件缓存工具.标记小说缓存正在使用(候选)
+                    return 候选
+            raise RuntimeError("下载缓存文件过多")
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def 删除缓存(路径: Any) -> None:

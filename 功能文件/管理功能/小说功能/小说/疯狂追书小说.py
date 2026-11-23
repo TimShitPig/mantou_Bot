@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用
+
+_平台同步调用 = 创建平台同步调用('疯狂追书')
+
 import asyncio
 import base64
 import binascii
@@ -726,7 +730,7 @@ def 写入疯狂追书下载缓存文件(文件名: str, 内容: bytes) -> Path:
 
 
 async def _写入缓存(文件名: str, 内容: bytes) -> Path:
-    任务 = asyncio.create_task(asyncio.to_thread(写入疯狂追书下载缓存文件, 文件名, 内容))
+    任务 = asyncio.create_task(_平台同步调用(写入疯狂追书下载缓存文件, 文件名, 内容))
     try:
         return await asyncio.shield(任务)
     except asyncio.CancelledError:
@@ -761,7 +765,7 @@ async def 生成疯狂追书下载回复流(
             阶段 = "chapters"
             章节结果 = await client.download_all(书籍编号, 目录, toc_id=详情.get("toc_id"))
         阶段 = "txt"
-        文件名, 内容 = await asyncio.to_thread(生成疯狂追书小说文件内容, 书籍编号, 书籍信息, 目录, 章节结果)
+        文件名, 内容 = await _平台同步调用(生成疯狂追书小说文件内容, 书籍编号, 书籍信息, 目录, 章节结果)
         路径 = await _写入缓存(文件名, 内容)
         阶段 = "upload"
         上传 = await 小说网盘.上传小说并获取分享链接(配置, 路径, 文件名)

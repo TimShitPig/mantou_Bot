@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用
+
+_平台同步调用 = 创建平台同步调用('番茄')
+
 import asyncio
 import html
 import importlib
@@ -1511,7 +1515,7 @@ async def 预检番茄目录(书籍编号: str) -> bool | None:
 
     状态: bool | None = None
     try:
-        目录 = await asyncio.to_thread(番茄小说.resolve_directory, 书籍编号)
+        目录 = await _平台同步调用(番茄小说.resolve_directory, 书籍编号)
         状态 = bool(目录)
     except Exception as 异常:
         错误文本 = str(异常)

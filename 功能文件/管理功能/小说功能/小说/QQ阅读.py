@@ -7,6 +7,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('QQ阅读')
+
 import asyncio
 import base64
 import binascii
@@ -73,6 +77,8 @@ from Crypto.Hash import MD2, MD4
 from Crypto.Util import Counter
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('QQ阅读', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 # === decrypt ===
@@ -3884,7 +3890,7 @@ def _合并QQ阅读账号资料(
 
 
 async def 刷新QQ阅读账号资料(配置: Any, 账号ID: str = "") -> dict[str, Any]:
-    凭据 = await asyncio.to_thread(读取QQ阅读账号凭据, 配置, 账号ID)
+    凭据 = await _平台同步调用(读取QQ阅读账号凭据, 配置, 账号ID)
     if not 凭据:
         raise ValueError("QQ阅读账号不存在")
     with QQ阅读账号上下文(凭据):
@@ -3892,7 +3898,7 @@ async def 刷新QQ阅读账号资料(配置: Any, 账号ID: str = "") -> dict[st
             资料 = await 查询QQ阅读账号资料(session)
     if not 资料.get("available") and 资料.get("auth_status") != "invalid":
         raise ValueError("QQ阅读账号资料暂未获取")
-    return await asyncio.to_thread(_合并QQ阅读账号资料, 配置, 凭据, 资料)
+    return await _平台同步调用(_合并QQ阅读账号资料, 配置, 凭据, 资料)
 
 
 def _读取QQ阅读登录态(配置: Any) -> dict[str, str] | None:
@@ -3905,11 +3911,11 @@ def _保存QQ阅读登录态(配置: Any, 登录态: dict[str, Any]) -> None:
 
 
 async def 加载保存的QQ阅读登录态(配置: Any) -> bool:
-    await asyncio.to_thread(初始化参考核心)
+    await _平台同步调用(初始化参考核心)
     if not 已配置运行状态数据库(配置):
         return False
     try:
-        登录态 = await asyncio.to_thread(_读取QQ阅读登录态, 配置)
+        登录态 = await _平台同步调用(_读取QQ阅读登录态, 配置)
     except Exception as exc:
         logger.warning(f"QQ阅读登录态读取失败：错误={type(exc).__name__}")
         return False
@@ -3934,7 +3940,7 @@ async def 处理QQ阅读Cookie指令(
     if not 已配置运行状态数据库(配置):
         return "数据库未配置，QQ阅读Cookie未保存"
     try:
-        await asyncio.to_thread(_保存QQ阅读登录态, 配置, 登录态)
+        await _平台同步调用(_保存QQ阅读登录态, 配置, 登录态)
     except Exception as exc:
         logger.warning(f"QQ阅读Cookie保存失败：错误={type(exc).__name__}")
         return "QQ阅读Cookie保存失败，请稍后再试"
@@ -5427,10 +5433,15 @@ def 生成不冲突缓存路径(filename: str) -> Path:
 
 
 def 写入下载缓存文件(filename: str, content: bytes) -> Path:
-    path = 生成不冲突缓存路径(filename)
-    path.write_bytes(content)
-    文件缓存工具.标记小说缓存正在使用(path)
-    return path
+    for _缓存写入重试 in range(1000):
+        try:
+            path = 生成不冲突缓存路径(filename)
+            文件缓存工具.独占写入小说缓存(path, content)
+            文件缓存工具.标记小说缓存正在使用(path)
+            return path
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def 删除小说缓存文件(path: Any) -> None:
@@ -5448,7 +5459,7 @@ async def 准备发送文本文件(
     书名: Any = "",
     作者: Any = "",
 ) -> dict[str, Any]:
-    cache_path = 写入下载缓存文件(filename, content)
+    cache_path = await _平台缓存调用(写入下载缓存文件,filename, content)
     if 小说网盘 is None:
         删除小说缓存文件(cache_path)
         return {
@@ -5552,7 +5563,7 @@ async def 生成下载回复流(
 ) -> AsyncIterator[Any]:
     """一次下载固定一个启用账号；后续切换和停用只影响新任务。"""
     try:
-        登录态 = await asyncio.to_thread(_读取QQ阅读登录态, 配置)
+        登录态 = await _平台同步调用(_读取QQ阅读登录态, 配置)
     except Exception as exc:
         logger.warning("QQ阅读下载账号读取失败：错误类型=%s", type(exc).__name__)
         yield 下载失败提示
@@ -5691,7 +5702,7 @@ async def 生成QQ阅读下载文件流(
                 凭据 = {"id": "qr_" + hashlib.sha256(当前账号.uid.encode("ascii")).hexdigest()[:20],
                         "ywguid": 当前账号.uid, "ywkey": 当前账号.usid}
                 try:
-                    await asyncio.to_thread(_合并QQ阅读账号资料, 状态配置, 凭据,
+                    await _平台同步调用(_合并QQ阅读账号资料, 状态配置, 凭据,
                                             {键: account_vip[键] for 键 in ("auth_status", "auth_checked_at")})
                 except Exception as exc:
                     logger.warning("QQ阅读登录状态保存失败：错误类型=%s", type(exc).__name__)

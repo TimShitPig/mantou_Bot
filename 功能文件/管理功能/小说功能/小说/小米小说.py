@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('小米')
+
 import asyncio
 import base64
 import html
@@ -33,6 +37,8 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('小米', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 # 小米阅读网页的旧 /api/v2/search 目前只返回固定推荐项；搜索改用当前 dushu
@@ -482,7 +488,7 @@ async def _解析小米正文(会话: aiohttp.ClientSession, 数据: dict[str, A
             async with 会话.get(文本内容[0]) as 响应:
                 响应.raise_for_status()
                 页面 = await 响应.read()
-            return await asyncio.to_thread(_解析旧版正文页面, 页面)
+            return await _平台同步调用(_解析旧版正文页面, 页面)
         except Exception:
             return ""
     return "\n".join(文本内容).replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -517,7 +523,7 @@ async def _下载小米章节(
                     async with 会话.get(内容地址) as 响应:
                         响应.raise_for_status()
                         页面 = await 响应.read()
-                    正文 = await asyncio.to_thread(_解析旧版正文页面, 页面)
+                    正文 = await _平台同步调用(_解析旧版正文页面, 页面)
                     if 正文:
                         return 正文
                     raise RuntimeError("empty content")
@@ -603,18 +609,23 @@ def 生成小米小说文件内容(
 
 
 def 写入小米下载缓存文件(文件名: str, 内容: bytes) -> Path:
-    小米小说缓存目录.mkdir(parents=True, exist_ok=True)
-    安全文件名 = Path(_清理文件名(文件名)).name
-    路径 = 小米小说缓存目录 / 安全文件名
-    if 路径.exists():
-        for 序号 in range(1, 1000):
-            候选 = 小米小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
-            if not 候选.exists():
-                路径 = 候选
-                break
-    路径.write_bytes(内容)
-    文件缓存工具.标记小说缓存正在使用(路径)
-    return 路径
+    for _缓存写入重试 in range(1000):
+        try:
+            小米小说缓存目录.mkdir(parents=True, exist_ok=True)
+            安全文件名 = Path(_清理文件名(文件名)).name
+            路径 = 小米小说缓存目录 / 安全文件名
+            if 路径.exists():
+                for 序号 in range(1, 1000):
+                    候选 = 小米小说缓存目录 / f"{路径.stem}_{序号}{路径.suffix}"
+                    if not 候选.exists():
+                        路径 = 候选
+                        break
+            文件缓存工具.独占写入小说缓存(路径, 内容)
+            文件缓存工具.标记小说缓存正在使用(路径)
+            return 路径
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def 删除小米缓存文件(路径: Any) -> None:
@@ -625,7 +636,7 @@ def 删除小米缓存文件(路径: Any) -> None:
 async def _准备发送文本文件(
     event: Any, 文件名: str, 内容: bytes, 配置: Any, 书名: str, 作者: str
 ) -> dict[str, Any]:
-    路径 = 写入小米下载缓存文件(文件名, 内容)
+    路径 = await _平台缓存调用(写入小米下载缓存文件,文件名, 内容)
     if 小说网盘 is None:
         删除小米缓存文件(路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None}
@@ -727,7 +738,7 @@ async def 生成小米下载回复流(
             )
             yield 小米下载失败提示
             return
-        文件名, 内容 = 生成小米小说文件内容(书籍编号, 详情, 目录, 正文列表)
+        文件名, 内容 = await _平台同步调用(生成小米小说文件内容,书籍编号, 详情, 目录, 正文列表)
         发送结果 = await _准备发送文本文件(
             event,
             文件名,

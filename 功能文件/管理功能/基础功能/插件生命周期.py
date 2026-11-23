@@ -12,7 +12,7 @@ from astrbot.api import logger
 from . import QQ官方交互桥, 文件缓存, 权限工具, 消息日志防护, 消息记录, 机器人作用域
 from 功能文件.页面功能 import 帮助网页
 from 功能文件.管理功能.网盘功能 import 小说网盘, 夸克媒体归档
-from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关
+from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关, 平台隔离执行
 from 功能文件.管理功能.小说功能.小说 import QQ阅读, 得间小说, 塔读小说, STV小说, 书耽小说
 
 _ZLibrary = importlib.import_module("功能文件.管理功能.小说功能.小说.Z-Library小说")
@@ -150,6 +150,7 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
           "help": 帮助功能, "web": None, "cache_daily": None, "background": [], "log_filter": None}
     _当前句柄 = 句柄
     try:
+        平台隔离执行.启动平台执行器()
         书耽小说.启动书耽资源()
         句柄["log_filter"] = 消息日志防护.安装消息日志过滤器()
         QQ官方交互桥.安装QQ官方帮助交互(上下文)
@@ -227,6 +228,7 @@ async def _完成停止插件(句柄: dict[str, Any]) -> None:
             关闭()
         except Exception as 异常:
             logger.warning("插件资源关闭失败：stage=%s, error_type=%s", 阶段, type(异常).__name__)
+    await _停止("platform_executors", 平台隔离执行.关闭全部平台执行器)
     消息日志防护.移除消息日志过滤器(句柄.get("log_filter"))
     if _当前句柄 is 句柄:
         _当前句柄 = None

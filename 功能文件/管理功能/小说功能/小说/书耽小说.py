@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import html
 import hashlib
 import logging
 import json
 import re
-import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -27,6 +24,12 @@ from 功能文件.管理功能.基础功能 import 文件缓存
 from 功能文件.管理功能.基础功能.消息工具 import 读取字段
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.小说功能.功能.文本处理 import 格式化小说字数
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import (
+    创建平台同步调用, 创建平台缓存调用, 运行原脚本, 关闭平台原脚本,
+)
+
+_平台同步调用 = 创建平台同步调用("书耽")
+_平台缓存调用 = 创建平台缓存调用("书耽", 文件缓存.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.小说 import 番茄小说
 from 功能文件.管理功能.网盘功能 import 小说网盘
 
@@ -466,15 +469,8 @@ def _保存缓存(文件名: str, 内容: bytes) -> Path:
     raise 书耽请求错误("cache_collision")
 
 async def _异步写入缓存(文件名: str, 内容: bytes) -> Path:
-    任务 = asyncio.create_task(asyncio.to_thread(_保存缓存, 文件名, 内容))
-    try:
-        return await asyncio.shield(任务)
-    except asyncio.CancelledError:
-        try:
-            路径 = await 任务
-            文件缓存.删除小说缓存文件(路径)
-        finally:
-            raise
+    return await _平台缓存调用(_保存缓存, 文件名, 内容)
+
 
 def 获取书耽小说回复流(event: Any, 命令文本: str, 配置: Any = None) -> AsyncIterator[Any] | None:
     来源 = 书耽来源(提取书耽详情书号(event, 命令文本))
@@ -483,16 +479,8 @@ def 获取书耽小说回复流(event: Any, 命令文本: str, 配置: Any = Non
 _书耽源指纹 = hashlib.sha256(_书耽原脚本.encode("utf-8")).digest()
 书耽正文最大并发数 = 200
 _书耽进度日志间隔 = 10.0
-if "_书耽线程池" not in globals():
-    _书耽线程池 = None
-if "_书耽资源锁" not in globals():
-    _书耽资源锁 = threading.RLock()
-if "_书耽会话" not in globals():
-    _书耽会话 = {}
 if "_书耽已关闭" not in globals():
     _书耽已关闭 = False
-if "_书耽线程本地" not in globals():
-    _书耽线程本地 = threading.local()
 if "_章节限额" not in globals():
     _章节限额 = WeakValueDictionary()
 
@@ -504,42 +492,16 @@ class 书耽请求错误(RuntimeError):
     pass
 
 
-def _源脚本提示(*参数: Any, **选项: Any) -> None:
-    logger.debug("书耽原脚本运行提示")
-
-
-def _线程调用原函数(源码: str, 指纹: bytes, 名称: str, 参数: tuple[Any, ...]) -> Any:
-    已加载 = getattr(_书耽线程本地, "原脚本", None)
-    if 已加载 is None or 已加载[0] != 指纹:
-        if 已加载 is not None:
-            旧会话 = 已加载[1]["SESSION"]
-            旧会话.close()
-            with _书耽资源锁:
-                _书耽会话.pop(id(旧会话), None)
-        命名空间 = {"__name__": "_mantou_shubl_original", "print": _源脚本提示}
-        exec(compile(源码, "<书耽原脚本>", "exec"), 命名空间)
-        已加载 = (指纹, 命名空间)
-        _书耽线程本地.原脚本 = 已加载
-        with _书耽资源锁:
-            _书耽会话[id(命名空间["SESSION"])] = 命名空间["SESSION"]
-    return 已加载[1][名称](*参数)
-
-
 async def _调用原函数(名称: str, *参数: Any) -> Any:
-    global _书耽线程池
-    循环 = asyncio.get_running_loop()
-    with _书耽资源锁:
-        if _书耽已关闭:
-            raise 书耽请求错误("service_stopped")
-        if _书耽线程池 is None:
-            _书耽线程池 = ThreadPoolExecutor(max_workers=200, thread_name_prefix="shubl")
-        任务 = 循环.run_in_executor(
-            _书耽线程池, functools.partial(_线程调用原函数, _书耽原脚本, _书耽源指纹, 名称, 参数)
-        )
+    if _书耽已关闭:
+        raise 书耽请求错误("service_stopped")
+    任务 = asyncio.create_task(运行原脚本(
+        "书耽", _书耽原脚本, 名称, 参数, max_workers=书耽正文最大并发数
+    ))
     try:
         return await asyncio.shield(任务)
     except asyncio.CancelledError:
-        # 重复取消也须等原同步函数结束，不改变它的请求或下载行为。
+        # 原函数仍在专属进程内执行，等待结果后结束当前项目任务。
         while not 任务.done():
             try:
                 await asyncio.shield(任务)
@@ -554,22 +516,21 @@ async def _调用原函数(名称: str, *参数: Any) -> Any:
 
 def 启动书耽资源() -> None:
     global _书耽已关闭
-    with _书耽资源锁:
-        _书耽已关闭 = False
+    _书耽已关闭 = False
 
 
 async def 关闭书耽资源() -> None:
-    global _书耽线程池, _书耽已关闭
-    with _书耽资源锁:
-        _书耽已关闭 = True
-        线程池, _书耽线程池 = _书耽线程池, None
-    if 线程池 is not None:
-        await asyncio.to_thread(线程池.shutdown, wait=True, cancel_futures=True)
-    with _书耽资源锁:
-        会话列表 = list(_书耽会话.values())
-        _书耽会话.clear()
-    for 会话 in 会话列表:
-        会话.close()
+    global _书耽已关闭
+    _书耽已关闭 = True
+    # 热升级时仅收尾已存在的旧线程池，不再向它提交任何下载。
+    旧池 = globals().get("_书耽线程池")
+    if 旧池 is not None:
+        globals()["_书耽线程池"] = None
+        await asyncio.to_thread(旧池.shutdown, wait=True, cancel_futures=True)
+        for 会话 in list(globals().get("_书耽会话", {}).values()):
+            会话.close()
+        globals().get("_书耽会话", {}).clear()
+    await 关闭平台原脚本("书耽")
 
 
 def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes]:
@@ -662,7 +623,7 @@ async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = Non
         结果 = await _下载原脚本章节(目录, 书籍编号=书籍编号)
         阶段 = "txt"
         logger.info("书耽生成TXT：书号=%s，章节=%s", 书籍编号, len(结果))
-        文件名, 内容 = await asyncio.to_thread(番茄小说.生成番茄小说文件内容, 书籍编号, 书籍信息, 目录, 结果)
+        文件名, 内容 = await _平台同步调用(番茄小说.生成番茄小说文件内容, 书籍编号, 书籍信息, 目录, 结果)
         路径 = await _异步写入缓存(文件名, 内容)
         阶段 = "upload"
         logger.info("书耽文件交付开始：书号=%s，字节=%s", 书籍编号, len(内容))

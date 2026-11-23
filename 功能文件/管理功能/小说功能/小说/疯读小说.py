@@ -29,6 +29,11 @@ try:
 except ImportError:
     小说网盘 = None
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('疯读')
+_平台缓存调用 = 创建平台缓存调用('疯读', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 疯读基础地址 = "https://fiction.fengduxiaoshuo.com"
@@ -475,7 +480,7 @@ def _写入缓存(filename: str, content: bytes) -> Path:
 
 
 async def _发送(event: Any, filename: str, content: bytes, config: Any, detail: dict[str, Any]) -> dict[str, Any]:
-    path = _写入缓存(filename, content)
+    path = await _平台缓存调用(_写入缓存,filename, content)
     cancelled = False
     try:
         if 小说网盘 is None:
@@ -507,7 +512,7 @@ async def 生成疯读下载回复流(event: Any, source: str, config: Any = Non
             yield 格式化疯读下载提示(detail, len(chapters))
             stage = "chapters"
             bodies = await 下载疯读正文(session, book_id, chapters)
-        filename, content = 生成疯读文件(book_id, detail, chapters, bodies)
+        filename, content = await _平台同步调用(生成疯读文件,book_id, detail, chapters, bodies)
         logger.info("疯读小说章节下载完成：书籍编号=%s, 成功=%s, 总数=%s, 文件大小=%s", book_id, len(bodies), len(chapters), len(content))
         stage = "upload_send"
         result = await _发送(event, filename, content, config, detail)

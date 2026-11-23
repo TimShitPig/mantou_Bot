@@ -6,6 +6,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('番茄')
+
 import asyncio
 import base64
 import binascii
@@ -71,6 +75,8 @@ except Exception as 异常:
     logger.warning(f"百度网盘模块加载失败, 错误={异常}")
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('番茄', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 # 正文接口按章节 ID 解析内容，固定一个已可用的请求书籍上下文以兼容已下线的书籍记录。
@@ -2212,7 +2218,7 @@ async def 异步full_mget(
     sign_mode: str = "auto",
 ) -> Tuple[Dict[str, Any], int]:
     """使用 HTTP/2 异步会话拉取一批畅听正文。"""
-    client_x, request_key = await asyncio.to_thread(make_encrypt_context)
+    client_x, request_key = await _平台同步调用(make_encrypt_context)
     request_body = {
         "item_ids": [str(item_id) for item_id in item_ids],
         "book_id": NOVELFM_REQUEST_BOOK_ID,
@@ -2223,7 +2229,7 @@ async def 异步full_mget(
     }
     body_bytes = json_body_bytes(request_body)
     last_response: Dict[str, Any] = {}
-    request_options = await asyncio.to_thread(
+    request_options = await _平台同步调用(
         full_mget_request_options,
         body_bytes,
         sign_mode,
@@ -3569,7 +3575,7 @@ async def 异步获取番茄阅读注册密钥(client: Any, 需要版本: int = 
             method="POST",
             body={"content": content, "keyver": 1},
         )
-        return await asyncio.to_thread(_解析番茄阅读注册密钥, response, 需要版本)
+        return await _平台同步调用(_解析番茄阅读注册密钥, response, 需要版本)
 
 
 def 解密番茄阅读正文(content: str, 密钥: bytes) -> str:
@@ -3830,7 +3836,7 @@ async def 异步读取番茄阅读正文(
                 raise _番茄阅读错误(exc, "chapter_response") from None
             key = await 获取共享密钥(version)
             async with decrypt_gate:
-                plaintext = await asyncio.to_thread(
+                plaintext = await _平台同步调用(
                     解密番茄阅读正文, item["content"], key
                 )
             info = dict(item)
@@ -4380,7 +4386,7 @@ async def 生成番茄下载回复流(
             yield 番茄下载失败提示
             return
 
-        文件名, 文件内容 = 生成番茄小说文件内容(书籍编号, 书籍信息, 目录, 章节结果列表)
+        文件名, 文件内容 = await _平台同步调用(生成番茄小说文件内容,书籍编号, 书籍信息, 目录, 章节结果列表)
         logger.info(
             f"番茄小说章节下载完成：书籍编号={书籍编号}, 书名={书籍信息.get('title')}, "
             f"成功={len(成功章节列表)}, 总数={len(目录)}, 文件大小={len(文件内容)}"
@@ -4773,7 +4779,7 @@ async def 异步下载番茄全部章节(
 
     async with AsyncExitStack() as stack:
         async def 关闭解密执行器() -> None:
-            await asyncio.to_thread(
+            await _平台同步调用(
                 解密执行器.shutdown,
                 wait=True,
                 cancel_futures=True,
@@ -5054,7 +5060,7 @@ async def 准备发送番茄文本文件(
     作者: Any = "",
 ) -> dict[str, Any]:
     logger.debug(f"番茄小说准备上传：文件={文件名}, 大小={len(文件内容)}")
-    缓存路径 = 写入番茄下载缓存文件(文件名, 文件内容)
+    缓存路径 = await _平台缓存调用(写入番茄下载缓存文件,文件名, 文件内容)
     logger.debug(f"番茄小说写入下载缓存：文件={缓存路径}, 大小={len(文件内容)}")
     if 小说网盘 is None:
         删除番茄缓存文件(缓存路径)
@@ -5169,11 +5175,16 @@ def 删除番茄缓存文件(缓存路径: Any) -> None:
 
 
 def 写入番茄下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
-    番茄小说缓存目录.mkdir(parents=True, exist_ok=True)
-    缓存路径 = 生成不冲突番茄缓存路径(文件名)
-    缓存路径.write_bytes(文件内容)
-    文件缓存工具.标记小说缓存正在使用(缓存路径)
-    return 缓存路径
+    for _缓存写入重试 in range(1000):
+        try:
+            番茄小说缓存目录.mkdir(parents=True, exist_ok=True)
+            缓存路径 = 生成不冲突番茄缓存路径(文件名)
+            文件缓存工具.独占写入小说缓存(缓存路径, 文件内容)
+            文件缓存工具.标记小说缓存正在使用(缓存路径)
+            return 缓存路径
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def 生成不冲突番茄缓存路径(文件名: str) -> Path:

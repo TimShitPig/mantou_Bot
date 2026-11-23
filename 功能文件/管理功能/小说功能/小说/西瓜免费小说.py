@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('西瓜免费小说')
+
 import asyncio
 import base64
 import datetime as dt
@@ -36,6 +40,8 @@ try:
 except Exception:
     小说网盘 = None
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('西瓜免费小说', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 西瓜基础地址 = "https://xgmf.zuanqianyi.com"
@@ -199,7 +205,7 @@ async def _签名(value: str, sign_type: int) -> str:
         return _同步签名(value, sign_type)
     _初始化同步器()
     async with _游客状态["cpu"]:
-        return await asyncio.to_thread(_同步签名, value, sign_type)
+        return await _平台同步调用(_同步签名, value, sign_type)
 
 
 def 创建西瓜HTTP会话(concurrency: int = 500) -> aiohttp.ClientSession:
@@ -632,7 +638,7 @@ def _写入缓存(filename: str, content: bytes) -> Path:
 
 
 async def _发送(event: Any, filename: str, content: bytes, config: Any, detail: dict[str, Any]) -> dict[str, Any]:
-    path = _写入缓存(filename, content)
+    path = await _平台缓存调用(_写入缓存,filename, content)
     cancelled = False
     try:
         if 小说网盘 is None:
@@ -666,7 +672,7 @@ async def 生成西瓜下载回复流(event: Any, source: str, config: Any = Non
             yield 格式化西瓜下载提示(detail, len(chapters))
             stage = "chapters"
             contents = await 下载西瓜正文(session, book_id, chapters)
-        filename, content = 生成西瓜文件(book_id, detail, chapters, contents)
+        filename, content = await _平台同步调用(生成西瓜文件,book_id, detail, chapters, contents)
         logger.info("西瓜免费小说章节下载完成：书籍编号=%s, 成功=%s, 总数=%s, 文件大小=%s",
                     book_id, len(contents), len(chapters), len(content))
         stage = "upload_send"

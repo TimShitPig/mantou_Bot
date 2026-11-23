@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用
+
+_平台同步调用 = 创建平台同步调用('STV')
+
 import asyncio
 import hashlib
 import html
@@ -185,7 +189,7 @@ def _js_eval(source: str, expression: str | None, data: dict[str, Any] | None = 
 async def _run_js(source: str, expression: str | None, data: dict[str, Any] | None = None) -> str:
     async def execute() -> tuple[bool, Any]:
         try:
-            return True, await asyncio.to_thread(_js_eval, source, expression, data)
+            return True, await _平台同步调用(_js_eval, source, expression, data)
         except Exception as exc:
             return False, exc
 

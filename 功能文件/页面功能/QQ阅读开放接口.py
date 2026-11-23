@@ -1,6 +1,10 @@
 """QQ 阅读第三方任务接口；与控制台登录、QQ 发送及网盘上传分离。"""
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用
+
+_平台同步调用 = 创建平台同步调用('QQ阅读')
+
 import asyncio
 import hashlib
 import hmac
@@ -102,7 +106,7 @@ async def _下载账号快照(配置: Any) -> tuple[str, dict[str, Any] | None]:
             return 候选[0]
         return (appids[0], None) if len(appids) == 1 else ("", None)
 
-    return await asyncio.to_thread(读取)
+    return await _平台同步调用(读取)
 
 
 def _公开任务(任务: dict[str, Any]) -> dict[str, Any]:
@@ -446,7 +450,7 @@ class QQ阅读接口服务:
                 try:
                     await 响应.prepare(request)
                     if request.method != "HEAD":
-                        while 数据 := await asyncio.to_thread(文件.read, 256 * 1024):
+                        while 数据 := await _平台同步调用(文件.read, 256 * 1024):
                             await 响应.write(数据)
                     await 响应.write_eof()
                 except (ConnectionResetError, BrokenPipeError):
@@ -486,7 +490,7 @@ class QQ阅读接口服务:
                             任务["path"] = str(路径)
                             文件缓存.标记临时缓存正在使用(路径)
                             文件缓存.标记小说缓存正在使用(路径)
-                            写入 = asyncio.create_task(asyncio.to_thread(路径.write_bytes, content))
+                            写入 = asyncio.create_task(_平台同步调用(路径.write_bytes, content))
                             try:
                                 await asyncio.shield(写入)
                             except asyncio.CancelledError:

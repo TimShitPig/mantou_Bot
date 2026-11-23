@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('STV')
+
 import asyncio
 import copy
 import hashlib
@@ -24,6 +28,8 @@ except ImportError:
 
 from .STV协议 import STVClient, STVError, STV_DOWNLOAD_CONCURRENCY, _close_idle_connector
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('STV', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     已配置运行状态数据库, 读取运行状态值, 写入运行状态值, 获取数据库配置, 数据库连接错误,
@@ -117,7 +123,7 @@ def _读取(配置: Any) -> dict[str, Any]:
 
 
 async def _读状态(配置: Any) -> dict[str, Any]:
-    state = await asyncio.to_thread(_读取, 配置)
+    state = await _平台同步调用(_读取, 配置)
     await _加载阅读记录(配置, state)
     return state
 
@@ -135,7 +141,7 @@ async def _写状态(配置: Any, state: dict[str, Any], 检查: Callable[[], bo
         写入运行状态值(配置, _命名空间, _状态键, json.dumps(state, ensure_ascii=True, separators=(",", ":")))
 
     # 写线程结束前不释放账号锁，取消与重新登录不会交叉覆盖状态。
-    task = asyncio.create_task(asyncio.to_thread(write))
+    task = asyncio.create_task(_平台同步调用(write))
     try:
         await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -205,7 +211,7 @@ async def _加载阅读记录(配置: Any, state: dict[str, Any]) -> None:
         if _阅读记录.get(key, {}).get("loaded"):
             return
         try:
-            raw = await asyncio.to_thread(读取运行状态值, 配置, _命名空间, _阅读状态键, "")
+            raw = await _平台同步调用(读取运行状态值, 配置, _命名空间, _阅读状态键, "")
         except Exception as exc:
             logger.warning("STV阅读记录读取失败：error_type=%s", type(exc).__name__)
             # 未取得持久进度时交给原任务退避，不能空状态起步再覆盖旧记录。
@@ -293,7 +299,7 @@ async def _执行阅读写入(scope: str) -> None:
     try:
         while (pending := _待写阅读记录.get(scope)) is not None:
             config, snapshot = pending
-            task = asyncio.create_task(asyncio.to_thread(_写阅读记录同步, config, snapshot))
+            task = asyncio.create_task(_平台同步调用(_写阅读记录同步, config, snapshot))
             written = await _等待阅读写入(task)
             if not written:
                 logger.warning("STV阅读记录保存暂缓：reason=state_changed")
@@ -418,7 +424,7 @@ async def _加载资料快照(配置: Any, state: dict[str, Any]) -> None:
     key = _阅读记录键(配置, state)
     if key in _资料快照:
         return
-    data = await asyncio.to_thread(_读取资料同步, 配置, state)
+    data = await _平台同步调用(_读取资料同步, 配置, state)
     # 并发摘要不能覆盖刚完成的刷新；身份由键和数据库二次核验隔离。
     if key not in _资料快照:
         while len(_资料快照) >= 128:
@@ -481,7 +487,7 @@ def _写资料同步(配置: Any, state: dict[str, Any], updates: dict[str, Any]
 
 async def _保存资料(配置: Any, state: dict[str, Any], updates: dict[str, Any], *, 清空: bool = False,
                   期望资料: dict[str, Any] | None = None) -> None:
-    task = asyncio.create_task(asyncio.to_thread(_写资料同步, 配置, copy.deepcopy(state), updates, 清空, 期望资料))
+    task = asyncio.create_task(_平台同步调用(_写资料同步, 配置, copy.deepcopy(state), updates, 清空, 期望资料))
     result = await _等待阅读写入(task)
     if result is None:
         raise STVError("snapshot_changed")
@@ -1376,7 +1382,7 @@ def _写缓存(filename: str, content: bytes) -> Path:
 async def _发送(event: Any, filename: str, content: bytes, config: Any, detail: dict[str, Any]) -> dict[str, Any]:
     from 功能文件.管理功能.网盘功能 import 小说网盘
 
-    path = _写缓存(filename, content)
+    path = await _平台缓存调用(_写缓存,filename, content)
     cancelled = False
     try:
         result = await 小说网盘.上传小说并获取分享链接(config, path, filename)
@@ -1391,6 +1397,19 @@ async def _发送(event: Any, filename: str, content: bytes, config: Any, detail
             文件缓存工具.解除小说缓存占用(path)
         else:
             文件缓存工具.删除小说缓存文件(path)
+
+
+def _生成STV文件(identity, detail, selected, contents):
+    lines = [_声明, "", f"名称：{detail['title']}", f"作者：{detail['author']}", f"状态：{detail['status']}",
+             f"字数：{格式化小说字数(detail['word_count'])}", f"书籍ID：{identity}", f"章节数：{len(selected)}", ""]
+    if detail["intro"]:
+        lines.extend(["简介：", detail["intro"], ""])
+    for chapter, body in zip(selected, contents):
+        lines.extend([chapter["title"], "", 去除章节正文重复标题(chapter["title"], body), ""])
+    safe = lambda value: re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", value).strip(" .")[:80] or "STV小说"
+    filename = f"[{detail['status']}]书名：{safe(detail['title'])} 作者：{safe(detail['author'])}.txt"
+    content = "\n".join(lines).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").encode("utf-8")
+    return filename, content
 
 
 async def 生成STV下载回复流(event: Any, source: str, config: Any = None) -> AsyncIterator[Any]:
@@ -1434,15 +1453,7 @@ async def 生成STV下载回复流(event: Any, source: str, config: Any = None) 
                 raise STVError("empty_content")
         if failures:
             logger.warning("STV小说章节下载汇总：book_id=%s, success=%s, skipped=%s, category=unavailable_chapters", identity, len(contents), failures)
-        lines = [_声明, "", f"名称：{detail['title']}", f"作者：{detail['author']}", f"状态：{detail['status']}",
-                 f"字数：{格式化小说字数(detail['word_count'])}", f"书籍ID：{identity}", f"章节数：{len(selected)}", ""]
-        if detail["intro"]:
-            lines.extend(["简介：", detail["intro"], ""])
-        for chapter, body in zip(selected, contents):
-            lines.extend([chapter["title"], "", 去除章节正文重复标题(chapter["title"], body), ""])
-        safe = lambda value: re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", value).strip(" .")[:80] or "STV小说"
-        filename = f"[{detail['status']}]书名：{safe(detail['title'])} 作者：{safe(detail['author'])}.txt"
-        content = "\n".join(lines).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").encode("utf-8")
+        filename, content = await _平台同步调用(_生成STV文件, identity, detail, selected, contents)
         logger.info("STV小说章节下载完成：书籍编号=%s, 成功=%s, 总数=%s, 文件大小=%s", identity, len(contents), len(chapters), len(content))
         stage = "upload_send"
         result = await _发送(event, filename, content, config, detail)

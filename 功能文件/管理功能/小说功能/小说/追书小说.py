@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('追书')
+
 import asyncio
 import base64
 import hashlib
@@ -37,6 +41,8 @@ except Exception as exc:
 
 from 功能文件.管理功能.基础功能.权限工具 import 读取字段
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+_平台缓存调用 = 创建平台缓存调用('追书', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 try:
@@ -602,7 +608,7 @@ async def _获取单章密钥(
                 headers=_请求头(需要令牌=True),
             )
             if 解密执行器 is None:
-                return _解析单章密钥(数据, order)
+                return await _平台同步调用(_解析单章密钥, 数据, order)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 解密执行器,
@@ -844,7 +850,7 @@ async def 下载全部章节(
                 await asyncio.sleep(min(1.0, 0.25 * 尝试次数))
     finally:
         关闭任务 = asyncio.create_task(
-            asyncio.to_thread(解密执行器.shutdown, wait=True, cancel_futures=True)
+            _平台同步调用(解密执行器.shutdown, wait=True, cancel_futures=True)
         )
         收尾取消 = False
         while not 关闭任务.done():
@@ -952,7 +958,7 @@ async def 生成下载回复流(
                 len(书籍.chapters),
             )
             章节内容 = await 下载全部章节(session, 书籍, 目录, 游客令牌)
-            文件名, 文件内容 = 生成小说文件内容(书籍, 章节内容)
+            文件名, 文件内容 = await _平台同步调用(生成小说文件内容,书籍, 章节内容)
             logger.info(
                 "追书小说章节下载完成：书籍编号=%s, 成功=%s, 文件大小=%s",
                 书籍.book_id,
@@ -1056,7 +1062,7 @@ async def 准备发送文本文件给当前会话(
     作者: Any = "",
 ) -> dict[str, Any]:
     logger.info("追书小说准备上传：文件=%s, 大小=%s", 文件名, len(文件内容))
-    缓存路径 = 写入下载缓存文件(文件名, 文件内容)
+    缓存路径 = await _平台缓存调用(写入下载缓存文件,文件名, 文件内容)
     if 小说网盘 is None:
         删除小说缓存文件(缓存路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None, "error": "网盘模块未加载"}
@@ -1106,11 +1112,16 @@ def 启动百度后台上传并清理源文件(配置: Any, 源缓存路径: Any
 
 
 def 写入下载缓存文件(文件名: str, 文件内容: bytes) -> Path:
-    小说缓存目录.mkdir(parents=True, exist_ok=True)
-    缓存路径 = 生成不冲突缓存路径(文件名)
-    缓存路径.write_bytes(文件内容)
-    文件缓存工具.标记小说缓存正在使用(缓存路径)
-    return 缓存路径
+    for _缓存写入重试 in range(1000):
+        try:
+            小说缓存目录.mkdir(parents=True, exist_ok=True)
+            缓存路径 = 生成不冲突缓存路径(文件名)
+            文件缓存工具.独占写入小说缓存(缓存路径, 文件内容)
+            文件缓存工具.标记小说缓存正在使用(缓存路径)
+            return 缓存路径
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 def 删除小说缓存文件(缓存路径: Any) -> None:

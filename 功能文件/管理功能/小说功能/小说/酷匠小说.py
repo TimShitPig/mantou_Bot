@@ -32,6 +32,11 @@ try:
 except Exception:
     百度网盘 = 小说网盘 = None
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('酷匠')
+_平台缓存调用 = 创建平台缓存调用('酷匠', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 酷匠基础地址 = "https://app.kujiang.com/v1/book"
@@ -412,22 +417,27 @@ def 生成酷匠文件(
 
 
 def _缓存(filename: str, content: bytes) -> Path:
-    酷匠缓存目录.mkdir(parents=True, exist_ok=True)
-    for index in range(1000):
-        path = 酷匠缓存目录 / (
-            Path(filename).name if index == 0 else f"{Path(filename).stem}_{index}.txt"
-        )
-        if not path.exists():
-            path.write_bytes(content)
-            文件缓存工具.标记小说缓存正在使用(path)
-            return path
-    raise RuntimeError("缓存文件名冲突")
+    for _缓存写入重试 in range(1000):
+        try:
+            酷匠缓存目录.mkdir(parents=True, exist_ok=True)
+            for index in range(1000):
+                path = 酷匠缓存目录 / (
+                    Path(filename).name if index == 0 else f"{Path(filename).stem}_{index}.txt"
+                )
+                if not path.exists():
+                    文件缓存工具.独占写入小说缓存(path, content)
+                    文件缓存工具.标记小说缓存正在使用(path)
+                    return path
+            raise RuntimeError("缓存文件名冲突")
+        except 文件缓存工具.小说缓存文件已存在:
+            continue
+    raise RuntimeError("小说缓存文件名冲突")
 
 
 async def _发送(
     event: Any, filename: str, content: bytes, config: Any, title: str, author: str
 ) -> dict[str, Any]:
-    path = _缓存(filename, content)
+    path = await _平台缓存调用(_缓存,filename, content)
     if 小说网盘 is None:
         文件缓存工具.删除小说缓存文件(path)
         return {"sent": False, "source_cache_path": None}
@@ -499,7 +509,7 @@ async def 生成酷匠下载回复流(
             )
             yield "下载失败 请重试"
             return
-        filename, content = 生成酷匠文件(book_id, detail, chapters, contents)
+        filename, content = await _平台同步调用(生成酷匠文件,book_id, detail, chapters, contents)
         result = await _发送(
             event,
             filename,

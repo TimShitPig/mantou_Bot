@@ -32,6 +32,11 @@ except Exception:
     小说网盘 = None
 
 from 功能文件.管理功能.基础功能 import 文件缓存 as 文件缓存工具
+
+from 功能文件.管理功能.小说功能.功能.平台隔离执行 import 创建平台同步调用, 创建平台缓存调用
+
+_平台同步调用 = 创建平台同步调用('百度')
+_平台缓存调用 = 创建平台缓存调用('百度', 文件缓存工具.删除小说缓存文件)
 from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章节正文重复标题, 格式化小说字数
 
 百度搜索地址 = "https://appyd.baidu.com/nabook/search/newbookseo"
@@ -1311,7 +1316,7 @@ def 删除百度缓存文件(路径: Any) -> None:
 async def _准备发送文本文件(
     event: Any, 文件名: str, 内容: bytes, 配置: Any, 书名: str, 作者: str
 ) -> dict[str, Any]:
-    路径 = 写入百度下载缓存文件(文件名, 内容)
+    路径 = await _平台缓存调用(写入百度下载缓存文件,文件名, 内容)
     if 小说网盘 is None:
         删除百度缓存文件(路径)
         return {"sent": False, "fallback_text": "", "source_cache_path": None}
@@ -1450,7 +1455,7 @@ async def 生成百度下载回复流(
         if not 成功数:
             yield "未获取到可下载章节"
             return
-        文件名, 内容 = 生成百度小说文件内容(书籍编号, 详情, 目录, 正文列表)
+        文件名, 内容 = await _平台同步调用(生成百度小说文件内容,书籍编号, 详情, 目录, 正文列表)
         发送结果 = await _准备发送文本文件(
             event,
             文件名,

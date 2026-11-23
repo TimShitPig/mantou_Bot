@@ -67,6 +67,25 @@ def 创建临时缓存文件(前缀: str = "mantou-", 后缀: str = "") -> Path:
     return Path(路径文本)
 
 
+class 小说缓存文件已存在(FileExistsError):
+    """只用于独占缓存写入发生同名竞争时重选路径。"""
+
+
+def 独占写入小说缓存(路径: str | Path, 内容: bytes) -> int:
+    """原子保留本次缓存路径，避免不同平台同名文件相互覆盖。"""
+    缓存路径 = Path(路径)
+    try:
+        文件 = 缓存路径.open("xb")
+    except FileExistsError:
+        raise 小说缓存文件已存在() from None
+    try:
+        with 文件:
+            return 文件.write(内容)
+    except BaseException:
+        缓存路径.unlink(missing_ok=True)
+        raise
+
+
 def 获取小说缓存目录列表() -> tuple[Path, ...]:
     """返回小说缓存目录与旧路径，兼容迁移过程中的上传续传任务。"""
     结果: list[Path] = [小说缓存目录]
