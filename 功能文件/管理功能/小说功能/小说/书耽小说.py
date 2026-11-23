@@ -481,7 +481,7 @@ _书耽源指纹 = hashlib.sha256(_书耽原脚本.encode("utf-8")).digest()
 _书耽段落并发数 = 8
 _书耽段落最大索引 = 300
 _书耽连续空段上限 = 15
-_书耽进度日志间隔 = 10.0
+_书耽进度日志分段数 = 4
 if "_书耽已关闭" not in globals():
     _书耽已关闭 = False
 if "_章节限额" not in globals():
@@ -608,6 +608,9 @@ def 书耽搜索账号标识(配置: Any = None) -> tuple[str, bytes]:
 
 
 async def _下载原脚本章节(目录: list[dict[str, Any]], *, 书籍编号: str = "") -> list[dict[str, Any]]:
+    总数 = len(目录)
+    if not 总数:
+        return []
     循环 = asyncio.get_running_loop()
     限额 = _章节限额.get(循环)
     if 限额 is None:
@@ -616,53 +619,59 @@ async def _下载原脚本章节(目录: list[dict[str, Any]], *, 书籍编号: 
     待下载 = iter(enumerate(目录))
     结果 = [{} for _ in 目录]
     已完成 = 0
-    处理中 = 0
-    开始 = time.monotonic()
+    失败数 = 0
+    进度步长 = max(1, (总数 + _书耽进度日志分段数 - 1) // _书耽进度日志分段数)
+    下次进度 = 进度步长
+    上次已处理 = -1
 
-    def 记录进度() -> None:
+    def 记录进度(*, 强制: bool = False) -> None:
+        nonlocal 下次进度, 上次已处理
+        已处理 = 已完成 + 失败数
+        if 已处理 == 上次已处理 or (not 强制 and 已处理 < 下次进度 and 已处理 < 总数):
+            return
         logger.info(
-            "书耽下载进度：书号=%s，已完成=%s/%s，处理中=%s，等待=%s，用时=%.1f秒",
-            书籍编号, 已完成, len(目录), 处理中,
-            max(0, len(目录) - 已完成 - 处理中), time.monotonic() - 开始,
+            "书耽小说章节进度：书籍编号=%s, 已处理=%s/%s, 处理百分比=%s%%, 成功=%s, 失败=%s",
+            书籍编号, 已处理, 总数, min(100, 已处理 * 100 // 总数), 已完成, 失败数,
         )
-
-    async def 进度心跳() -> None:
-        while True:
-            await asyncio.sleep(_书耽进度日志间隔)
-            记录进度()
+        上次已处理 = 已处理
+        while 下次进度 <= 已处理:
+            下次进度 += 进度步长
 
     async def 工作():
-        nonlocal 已完成, 处理中
+        nonlocal 已完成, 失败数
         for 序号, 章 in 待下载:
-            async with 限额:
-                处理中 += 1
-                try:
+            try:
+                async with 限额:
                     正文 = await _获取书耽章节正文(_编号(章.get("chapter_id")))
-                finally:
-                    处理中 -= 1
-            if not isinstance(正文, str) or not 正文.strip():
-                raise 书耽请求错误("empty_chapter")
-            结果[序号] = {
-                "index": 序号 + 1, "title": 章["chapter_title"],
-                "content": 正文, "success": True,
-            }
+                if not isinstance(正文, str) or not 正文.strip():
+                    raise 书耽请求错误("empty_chapter")
+                结果[序号] = {
+                    "index": 序号 + 1, "title": 章["chapter_title"],
+                    "content": 正文, "success": True,
+                }
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                失败数 += 1
+                raise
             已完成 += 1
-            if 已完成 == 1 or 已完成 == len(目录) or 已完成 % 100 == 0:
-                记录进度()
+            记录进度()
 
-    并发数 = min(200, len(目录))
-    logger.info("书耽正文下载开始：书号=%s，章节=%s，工作协程=%s", 书籍编号, len(目录), 并发数)
+    并发数 = min(书耽正文最大并发数, 总数)
+    logger.info("书耽正文下载开始：书号=%s，章节=%s，工作协程=%s", 书籍编号, 总数, 并发数)
+    记录进度(强制=True)
     任务列表 = [asyncio.create_task(工作()) for _ in range(并发数)]
-    心跳任务 = asyncio.create_task(进度心跳(), name="书耽下载进度")
     try:
         await asyncio.gather(*任务列表)
     finally:
-        心跳任务.cancel()
         for 任务 in 任务列表:
             if not 任务.done():
                 任务.cancel()
-        await asyncio.gather(心跳任务, *任务列表, return_exceptions=True)
+        await asyncio.gather(*任务列表, return_exceptions=True)
+        if 失败数:
+            记录进度(强制=True)
     return 结果
+
 
 async def 生成书耽下载回复流(event: Any, 来源: str, 配置: Any = None) -> AsyncIterator[Any]:
     匹配 = re.fullmatch(r"shubl:([0-9]{1,20})", str(来源 or ""))
