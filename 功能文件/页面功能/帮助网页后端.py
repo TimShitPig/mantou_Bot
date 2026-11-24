@@ -51,7 +51,8 @@ except Exception:
     "list_collapsed": False,
     "composer_collapsed": False,
 }
-媒体代理最大字节数 = 256 * 1024 * 1024
+媒体代理最大字节数 = 5 * 1024 * 1024 * 1024
+消息媒体上传最大字节数 = 256 * 1024 * 1024
 媒体代理超时秒 = 30
 媒体代理连接超时秒 = 10
 媒体代理读取超时秒 = 60
@@ -185,7 +186,7 @@ async def 机器人作用域中间件(request: web.Request, handler: Any) -> web
             return await handler(request)
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
-    媒体读取 = 路径 in {"/api/message/media", "/api/message/lanzou-image", "/api/message/quark-media"} or 路径.startswith("/api/message/local-media/")
+    媒体读取 = 路径 in {"/api/message/media"} or 路径.startswith("/api/message/local-media/")
     appid = 规范化机器人AppID(request.query.get("appid"))
     if not appid:
         if 媒体读取 and not request.query.get("appid"):
@@ -258,6 +259,8 @@ async def 获取媒体代理会话() -> ClientSession:
             ),
             trust_env=True,
         )
+    if hasattr(_媒体代理会话, "_retry_connection"):
+        _媒体代理会话._retry_connection = False
     return _媒体代理会话
 
 
@@ -1436,7 +1439,7 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
                             if not 数据块:
                                 break
                             已读 += len(数据块)
-                            if 已读 > (10 * 1024 * 1024 if 名称 == 'image_file' else 媒体代理最大字节数):
+                            if 已读 > (10 * 1024 * 1024 if 名称 == 'image_file' else 消息媒体上传最大字节数):
                                 raise ValueError('媒体文件过大')
                             文件句柄.write(数据块)
                 except (Exception, asyncio.CancelledError):
@@ -1560,17 +1563,33 @@ def _清除媒体代理失败(缓存键: str) -> None:
 
 
 async def _媒体上游地址已过期(上游: Any) -> bool:
-    """仅识别 QQ 明确返回的附件签名过期，不能把临时 4xx 锁成过期。"""
+    """只从完整、有界的 JSON 响应确认 QQ 明确的附件签名过期码。"""
+    async def 读取完整响应() -> bytes | None:
+        内容 = bytearray()
+        while True:
+            块 = await 上游.content.read(min(4096, 16 * 1024 + 1 - len(内容)))
+            if not 块:
+                return bytes(内容)
+            内容.extend(块)
+            if len(内容) > 16 * 1024:
+                return None
+
     try:
         if int(getattr(上游, "status", 0) or 0) != 400:
             return False
-        内容 = await 上游.content.read(16 * 1024)
-        负载 = json.loads(内容.decode("utf-8", errors="ignore"))
+        内容 = await asyncio.wait_for(读取完整响应(), timeout=10)
+        if 内容 is None:
+            return False
+        负载 = json.loads(内容.decode("utf-8"))
         if not isinstance(负载, dict):
             return False
         错误码 = 负载.get("retcode", 负载.get("code"))
-        return str(错误码 or "").strip() == "-5503007"
-    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+        if type(错误码) is int:
+            return 错误码 == -5503007
+        return isinstance(错误码, str) and 错误码 == "-5503007"
+    except asyncio.CancelledError:
+        raise
+    except (ClientError, asyncio.TimeoutError, TimeoutError, OSError, TypeError, ValueError, UnicodeError):
         return False
 
 
@@ -1600,6 +1619,22 @@ def _媒体代理请求超时(模式: str) -> ClientTimeout:
     )
 
 
+def _解析媒体代理范围(范围: str) -> tuple[int | None, int | None] | None:
+    if not 范围:
+        return None
+    if len(范围) > 128:
+        raise ValueError("range_invalid")
+    匹配 = re.fullmatch(r"bytes=(\d*)-(\d*)", 范围.strip())
+    if not 匹配 or not any(匹配.groups()):
+        raise ValueError("range_invalid")
+    首, 尾 = 匹配.groups()
+    起点 = int(首) if 首 else None
+    终点 = int(尾) if 尾 else None
+    if (起点 is None and not 终点) or (起点 is not None and 终点 is not None and 终点 < 起点):
+        raise ValueError("range_invalid")
+    return 起点, 终点
+
+
 async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     """在同源会话中转发 QQ 附件，解决签名 URL 的跨域和响应类型问题。"""
     if not _请求已授权(request):
@@ -1611,6 +1646,19 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if 模式 not in {"image", "avatar", "file"}:
         模式 = "file"
     显示图片 = 模式 in {"image", "avatar"}
+    范围头 = str(request.headers.get("Range") or "").strip()
+    范围列表 = request.headers.getall("Range", []) if hasattr(request.headers, "getall") else ([范围头] if 范围头 else [])
+    try:
+        范围 = _解析媒体代理范围(范围头)
+        if len(范围列表) > 1:
+            raise ValueError("range_invalid")
+    except ValueError:
+        return web.Response(status=416, text="媒体范围无效")
+    if 范围 is not None:
+        首, 尾 = 范围
+        请求长度 = 尾 if 首 is None else (尾 - 首 + 1 if 尾 is not None else 0)
+        if 请求长度 > 媒体代理最大字节数:
+            return web.Response(status=413, text="媒体文件过大")
     缓存键 = _媒体代理缓存键(地址)
     if _媒体代理失败缓存命中(缓存键):
         return _媒体代理失败响应(模式, 已过期=True)
@@ -1623,20 +1671,47 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
         超时 = _媒体代理请求超时(模式)
         客户端 = await 获取媒体代理会话()
         阶段 = "upstream_request"
+        请求头 = {"Accept": "image/*,application/octet-stream,*/*", "User-Agent": "MantouBot/console-media"}
+        if 范围 is not None:
+            请求头["Range"] = 范围头
         async with 客户端.get(
             地址,
             allow_redirects=True,
             max_redirects=3,
             timeout=超时,
-            headers={
-                "Accept": "image/*,application/octet-stream,*/*",
-                "User-Agent": "MantouBot/console-media",
-            },
+            headers=请求头,
         ) as 上游:
                 上游状态 = int(getattr(上游, "status", 0) or 0)
                 最终地址 = str(getattr(上游, "url", 地址) or 地址)
                 if not _允许媒体地址(最终地址):
                     return web.Response(status=502, text="媒体地址不可用")
+                if 上游.status == 416:
+                    响应头 = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+                    无效范围 = re.fullmatch(r"bytes \*/(\d+)", 上游.headers.get("Content-Range", ""))
+                    if 无效范围:
+                        if int(无效范围.group(1)) > 媒体代理最大字节数:
+                            return web.Response(status=413, text="媒体文件过大")
+                        响应头["Content-Range"] = 无效范围.group(0)
+                    return web.Response(status=416, headers=响应头)
+                预期范围长度 = None
+                内容范围 = ""
+                if 上游.status == 206:
+                    匹配 = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", 上游.headers.get("Content-Range", ""))
+                    if not 匹配:
+                        return _媒体代理失败响应(模式)
+                    首字节, 尾字节, 总量 = map(int, 匹配.groups())
+                    if 总量 > 媒体代理最大字节数 or 尾字节 - 首字节 + 1 > 媒体代理最大字节数:
+                        return web.Response(status=413, text="媒体文件过大")
+                    if not 0 <= 首字节 <= 尾字节 < 总量:
+                        return _媒体代理失败响应(模式)
+                    if 范围 is not None:
+                        首, 尾 = 范围
+                        预期首 = max(0, 总量 - 尾) if 首 is None else 首
+                        预期尾 = 总量 - 1 if 首 is None or 尾 is None else min(尾, 总量 - 1)
+                        if (首字节, 尾字节) != (预期首, 预期尾):
+                            return _媒体代理失败响应(模式)
+                    内容范围 = 匹配.group(0)
+                    预期范围长度 = 尾字节 - 首字节 + 1
                 if 上游.status not in {200, 206}:
                     # QQ 附件仅在明确返回 -5503007 时才不可恢复；429、403 和
                     # CDN 短暂 4xx 都让前端立即尝试一次原地址，不能进入五分钟负缓存。
@@ -1649,11 +1724,17 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     内容长度 = int(上游.headers.get("Content-Length") or 0)
                 except (TypeError, ValueError):
                     内容长度 = 0
+                if 预期范围长度 is not None:
+                    if 上游.headers.get("Content-Length") is not None and 内容长度 != 预期范围长度:
+                        return _媒体代理失败响应(模式)
+                    内容长度 = 预期范围长度
                 if 内容长度 > 媒体代理最大字节数:
                     return web.Response(status=413, text="媒体文件过大")
 
                 阶段 = "read_prefix"
                 前缀 = await 上游.content.read(64 * 1024)
+                if 预期范围长度 is not None and len(前缀) > 预期范围长度:
+                    return _媒体代理失败响应(模式)
                 类型 = _识别媒体类型(
                     上游.headers.get("Content-Type"), 前缀, 最终地址, 模式
                 )
@@ -1668,6 +1749,11 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 }
                 if 内容长度 > 0:
                     响应头["Content-Length"] = str(内容长度)
+                if 内容范围:
+                    响应头["Content-Range"] = 内容范围
+                    响应头["Accept-Ranges"] = "bytes"
+                elif 上游.headers.get("Accept-Ranges") in {"bytes", "none"}:
+                    响应头["Accept-Ranges"] = 上游.headers["Accept-Ranges"]
                 if 显示图片:
                     响应头["Content-Disposition"] = "inline"
                 else:
@@ -1688,17 +1774,21 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     已发送 += len(前缀)
                 阶段 = "upstream_read"
                 async for 数据块 in 上游.content.iter_chunked(64 * 1024):
+                    if 预期范围长度 is not None and 已发送 + len(数据块) > 预期范围长度:
+                        raise ValueError("media_range_length_mismatch")
                     if 已发送 + len(数据块) > 媒体代理最大字节数:
                         logger.warning(
                             "帮助控制台媒体代理达到大小上限：模式=%s，大小上限=%d",
                             模式,
                             媒体代理最大字节数,
                         )
-                        break
+                        raise ValueError("media_size_limit")
                     阶段 = "response_write"
                     await 响应.write(数据块)
                     已发送 += len(数据块)
                     阶段 = "upstream_read"
+                if 预期范围长度 is not None and 已发送 != 预期范围长度:
+                    raise ValueError("media_range_length_mismatch")
                 阶段 = "response_eof"
                 await 响应.write_eof()
                 阶段 = "upstream_release"
@@ -1727,139 +1817,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 传输.close()
             return 响应
         return _媒体代理失败响应(模式)
-
-
-async def _处理蓝奏云归档图片(request: web.Request) -> web.StreamResponse:
-    return await _处理云盘归档媒体(request, "lanzou")
-
-
-async def _处理夸克归档媒体(request: web.Request) -> web.StreamResponse:
-    return await _处理云盘归档媒体(request, "quark")
-
-
-async def _处理云盘归档媒体(request: web.Request, provider: str) -> web.StreamResponse:
-    if not _请求已授权(request):
-        return web.Response(status=401, text="请先登录控制台")
-    会话标识 = str(request.query.get("chat_id") or "").strip()
-    类型 = str(request.query.get("chat_type") or "group").strip().lower()
-    消息ID = str(request.query.get("message_id") or "").strip()
-    appid = str(request.query.get("appid") or "").strip()
-    if appid and not re.fullmatch(r"[0-9]{4,32}", appid):
-        return web.Response(status=400, text="媒体记录参数无效")
-    try:
-        媒体索引 = int(request.query.get("media_index") or 0)
-    except (TypeError, ValueError):
-        return web.Response(status=400, text="媒体记录参数无效")
-    if not 会话标识 or len(会话标识) > 200 or 类型 not in {"group", "user"} or not 消息ID or len(消息ID) > 512 or not 0 <= 媒体索引 < 10000:
-        return web.Response(status=400, text="媒体记录参数无效")
-    响应: web.StreamResponse | None = None
-    阶段 = "archive_lookup"
-    上游状态: int | None = None
-    已发送 = 0
-    try:
-        import zlib
-        from 功能文件.管理功能.基础功能 import 消息记录, 消息记录存储
-        from 功能文件.管理功能.网盘功能 import 夸克媒体归档, 旧蓝奏云归档读取
-
-        归档模块 = 夸克媒体归档 if provider == "quark" else 旧蓝奏云归档读取
-        账号配置快照 = 夸克媒体归档._配置快照(_当前作用域配置())
-
-        数据库快照 = 消息记录存储.获取数据库配置快照(_当前作用域配置())
-        归档 = await _控制台线程执行(
-            消息记录存储.执行数据库配置快照操作, 数据库快照,
-            partial(消息记录存储.读取消息媒体归档, provider=provider, appid=appid), 会话标识, 消息ID, 类型, 媒体索引,
-        )
-        if not isinstance(归档, dict):
-            return web.Response(status=404, text="媒体归档不存在")
-        阶段 = "archive_metadata"
-        大小 = int(归档.get("size") or 0)
-        偏移 = 0 if provider == "quark" else 旧蓝奏云归档读取._归档偏移(归档)
-        try:
-            起点, 终点, 分段 = 归档模块.解析媒体范围(request.headers.get("Range", ""), 大小)
-        except ValueError:
-            return web.Response(status=416, headers={"Content-Range": f"bytes */{大小}"})
-        # ZIP_STORED 精确映射原文件偏移；若上游忽略 Range，则有界跳过容器头。
-        远端范围 = f"bytes={偏移 + 起点}-{偏移 + 终点}" if 偏移 or 分段 else ""
-        已完整读取 = False
-
-        async def 保存直链(直链: str, 获取时间: float) -> None:
-            if not 已完整读取:
-                return
-            参数 = (会话标识, 消息ID, 类型, 媒体索引, 归档, 直链, 获取时间)
-            成功 = await _控制台线程执行(
-                消息记录存储.执行数据库配置快照操作, 数据库快照,
-                partial(消息记录.更新消息媒体直链, provider=provider, appid=appid), *参数,
-            )
-            if 成功 and 数据库快照 == 消息记录存储.获取数据库配置快照(_当前作用域配置()):
-                消息记录.更新缓存消息媒体直链(*参数, provider=provider, appid=appid)
-
-        阶段 = "archive_open"
-        读取上下文 = (
-            夸克媒体归档.打开归档媒体(账号配置快照, 归档, 范围=远端范围, 保存直链=保存直链)
-            if provider == "quark" else 旧蓝奏云归档读取.打开归档图片(
-                str(归档.get("share_url") or ""), str(归档.get("password") or ""),
-                范围=远端范围, 归档资料=归档, 保存直链=保存直链,
-            )
-        )
-        async with 读取上下文 as 上游:
-            上游状态 = 上游.status
-            阶段 = "upstream_read"
-            块流 = 归档模块.读取归档媒体块(上游, 归档, 起点, 终点)
-            前块 = await anext(块流)
-            阶段 = "media_type"
-            MIME = str(归档.get("content_type") or "").split(";", 1)[0].lower()
-            文件归档 = 归档.get("media_kind") == "file" or MIME == "application/octet-stream"
-            if not 文件归档 and not re.fullmatch(r"(?:image|video|audio)/[a-z0-9.+-]+", MIME):
-                return web.Response(status=415, text="归档内容类型无效")
-            if 起点 == 0 and not 文件归档 and not 归档模块.识别媒体类型(前块[:128], MIME):
-                return web.Response(status=415, text="归档内容不是媒体")
-            响应头 = {"Content-Type": MIME, "Content-Length": str(终点 - 起点 + 1),
-                      "Content-Disposition": ("attachment; filename*=UTF-8''" + quote(_媒体文件名(归档.get("original_name") or 归档.get("filename")), safe="")) if 文件归档 else "inline", "Cache-Control": "private, max-age=3600",
-                      "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes",
-                      "Content-Security-Policy": "sandbox; default-src 'none'"}
-            if 分段:
-                响应头["Content-Range"] = f"bytes {起点}-{终点}/{大小}"
-            响应 = web.StreamResponse(status=206 if 分段 else 200, headers=响应头)
-            阶段 = "response_prepare"
-            await 响应.prepare(request)
-            校验 = zlib.crc32(前块)
-            阶段 = "response_write"
-            await 响应.write(前块)
-            已发送 += len(前块)
-            阶段 = "upstream_read"
-            async for 块 in 块流:
-                校验 = zlib.crc32(块, 校验)
-                阶段 = "response_write"
-                await 响应.write(块)
-                已发送 += len(块)
-                阶段 = "upstream_read"
-            阶段 = "crc"
-            if not 分段 and 归档.get("container") == "zip-stored" and 校验 & 0xffffffff != int(归档.get("crc32", -1)):
-                raise ValueError("archive_crc_mismatch")
-            阶段 = "response_eof"
-            await 响应.write_eof()
-            # Content-Length 响应的空 EOF 不一定触碰套接字，补查客户端连接。
-            传输 = request.transport
-            if 传输 is None or 传输.is_closing():
-                raise ConnectionResetError("media_client_disconnected")
-            阶段 = "complete"
-            已完整读取 = True
-            return 响应
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        # 仅响应写入边界的连接异常表示下游断开；同类上游异常仍需告警。
-        客户端断开 = 阶段 in {"response_prepare", "response_write", "response_eof"} and isinstance(exc, ConnectionError)
-        if 客户端断开:
-            logger.debug("帮助控制台云盘媒体请求被客户端中断：媒体序号=%s，阶段=%s，错误类型=%s，已发送字节=%d", 媒体索引 + 1, 阶段, type(exc).__name__, 已发送)
-        else:
-            logger.warning("帮助控制台云盘媒体读取失败：媒体序号=%s，阶段=%s，原因=%s，错误类型=%s，状态=%s，已发送字节=%d", 媒体索引 + 1, 阶段, getattr(exc, "阶段", "none"), type(exc).__name__, getattr(exc, "状态码", 0) or 上游状态 or "none", 已发送)
-        if 响应 is not None and (响应.prepared or 客户端断开):
-            响应.force_close()
-            if request.transport is not None:
-                request.transport.close()
-            return 响应
-        return web.Response(status=502, text="媒体归档暂时不可用")
 
 
 本地发送媒体有效期秒 = 3 * 24 * 60 * 60
@@ -4365,25 +4322,9 @@ async def _处理消息历史(request: web.Request) -> web.Response:
         )
         if 结果 is None:
             return _控制台错误(404, "原消息未保存或已删除")
-        try:
-            from 功能文件.管理功能.网盘功能 import 夸克媒体归档
-
-            for 消息项 in 结果.get("messages") or []:
-                if not isinstance(消息项, dict):
-                    continue
-                消息项["media"] = 夸克媒体归档.构造网页媒体字段(
-                    消息项.get("media"),
-                    会话标识,
-                    类型,
-                    str(消息项.get("message_id") or ""),
-                    appid=str(消息项.get("appid") or ""),
-                )
+        for 消息项 in 结果.get("messages") or []:
+            if isinstance(消息项, dict) and isinstance(消息项.get("media"), dict):
                 消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
-        except Exception as exc:
-            logger.debug("帮助控制台历史图片代理地址生成失败：错误类型=%s", type(exc).__name__)
-            for 消息项 in 结果.get("messages") or []:
-                if isinstance(消息项, dict) and isinstance(消息项.get("media"), dict):
-                    消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
         try:
             消息记录.安排待处理群信息刷新()
         except Exception:

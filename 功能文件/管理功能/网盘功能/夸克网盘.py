@@ -59,7 +59,6 @@ OSS错误码白名单 = frozenset({
     "/file/update/hash": "upload_hash",
     "/file/upload/auth": "upload_auth",
     "/file/upload/finish": "upload_finish",
-    "/file/download": "download_info",
     "/task": "task",
     "/share": "share_create",
     "/share/mypage/detail": "share_list",
@@ -631,45 +630,6 @@ class 夸克网盘客户端:
             logger.warning("夸克App分片上传失败重试：stage=%s, http_status=%s, reason=%s, oss_code=%s, attempt=%s/%s",
                            错误.阶段, 错误.HTTP状态, 错误.原因, 错误.OSS码 or "unknown", 失败次数, OSS分片上传尝试次数)
             await asyncio.sleep((3.0 if 错误.HTTP状态 == 429 else 1.0) * 2 ** (失败次数 - 1))
-
-    async def 获取文件下载地址(self, 文件ID: str) -> str:
-        """解析当前登录账号内精确文件的原文件地址；调用方负责同源代理。"""
-        if not isinstance(文件ID, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", 文件ID):
-            raise 夸克网盘请求错误("/file/download", 原因="invalid_file_id")
-        数据 = await self.请求JSON(
-            "POST", "/file/download", json_data={"fids": [文件ID]},
-        )
-        项目列表 = 数据.get("data")
-        if not isinstance(项目列表, list):
-            raise 夸克网盘请求错误("/file/download", 原因="invalid_download_response")
-        匹配项目 = [
-            项目 for 项目 in 项目列表
-            if isinstance(项目, dict) and 项目.get("fid") == 文件ID
-        ]
-        if len(匹配项目) != 1:
-            raise 夸克网盘请求错误("/file/download", 原因="download_file_mismatch")
-        地址 = 匹配项目[0].get("download_url")
-        if not isinstance(地址, str) or not 地址 or len(地址) > 16384 or any(
-            ord(字符) < 32 or ord(字符) == 127 for 字符 in 地址
-        ):
-            raise 夸克网盘请求错误("/file/download", 原因="invalid_download_url")
-        try:
-            解析 = urlsplit(地址)
-            主机 = str(解析.hostname or "").lower()
-            有效 = (
-                解析.scheme == "https"
-                and 解析.username is None and 解析.password is None
-                and 解析.port in (None, 443)
-                and re.fullmatch(
-                    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*quark\.cn", 主机,
-                ) is not None
-                and not 解析.fragment
-            )
-        except ValueError:
-            有效 = False
-        if not 有效:
-            raise 夸克网盘请求错误("/file/download", 原因="invalid_download_url")
-        return 地址
 
     async def 上传OSS单分片(
         self, 路径: Path, MD5: str, 上传参数: dict[str, Any]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import sys
 import time
 from typing import Any
 
@@ -11,13 +12,48 @@ from astrbot.api import logger
 
 from . import QQ官方交互桥, 文件缓存, 权限工具, 消息日志防护, 消息记录, 机器人作用域
 from 功能文件.页面功能 import 帮助网页
-from 功能文件.管理功能.网盘功能 import 小说网盘, 夸克媒体归档
+from 功能文件.管理功能.网盘功能 import 小说网盘
 from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关, 平台隔离执行
 from 功能文件.管理功能.小说功能.小说 import QQ阅读, 得间小说, 塔读小说, STV小说, 书耽小说
 
 _ZLibrary = importlib.import_module("功能文件.管理功能.小说功能.小说.Z-Library小说")
 _缓存准备任务: asyncio.Task[Any] | None = globals().get("_缓存准备任务")
 _当前句柄: dict[str, Any] | None = globals().get("_当前句柄")
+
+
+_旧聊天归档停止任务 = globals().get("_旧聊天归档停止任务")
+if _旧聊天归档停止任务 is None:
+    _旧聊天归档停止任务 = {}
+
+
+async def _停止旧聊天媒体归档() -> None:
+    """只收尾已加载的旧模块，启动或停止交接均不重新导入归档功能。"""
+    for 名称 in (
+        "功能文件.管理功能.网盘功能.夸克媒体归档",
+        "功能文件.管理功能.网盘功能.蓝奏云图片归档",
+    ):
+        旧模块 = sys.modules.get(名称)
+        停止 = getattr(旧模块, "停止图片归档任务", None)
+        if not callable(停止):
+            continue
+        任务 = _旧聊天归档停止任务.get(旧模块)
+        if 任务 is None:
+            任务 = asyncio.create_task(停止(), name="停止旧聊天媒体归档")
+            _旧聊天归档停止任务[旧模块] = 任务
+        try:
+            await asyncio.shield(任务)
+        except asyncio.CancelledError:
+            # 旧上传子任务退出后再传播取消，防止下一代启动时仍在后台运行。
+            while not 任务.done():
+                try:
+                    await asyncio.shield(任务)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not 任务.cancelled():
+                任务.exception()
+            raise
 
 
 def _准备缓存同步() -> dict[str, Any]:
@@ -150,6 +186,7 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
           "help": 帮助功能, "web": None, "cache_daily": None, "background": [], "log_filter": None}
     _当前句柄 = 句柄
     try:
+        await _停止旧聊天媒体归档()
         平台隔离执行.启动平台执行器()
         书耽小说.启动书耽资源()
         句柄["log_filter"] = 消息日志防护.安装消息日志过滤器()
@@ -157,7 +194,6 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
         消息记录.安装消息记录(上下文, 配置)
         文件缓存.重置进程上传占用()
         小说下载任务.保护中断小说缓存()
-        夸克媒体归档.启动图片归档任务(配置)
         句柄["web"] = await 帮助网页.启动帮助网页服务(配置, 插件版本=版本)
         句柄["background"] = [
             asyncio.create_task(_后台恢复(句柄), name="插件后台恢复"),
@@ -213,7 +249,7 @@ async def _完成停止插件(句柄: dict[str, Any]) -> None:
     await _停止("pan", 小说网盘.停止网盘后台任务)
     await _停止("accounts", _ZLibrary.停止ZLibrary账号任务)
     await _停止("stv", STV小说.停止STV后台任务)
-    await _停止("images", 夸克媒体归档.停止图片归档任务)
+    await _停止("legacy_chat_media", _停止旧聊天媒体归档)
     await _停止("web", 帮助网页.停止帮助网页服务, 句柄["web"], 保留会话=True)
     await _停止("shubl", 书耽小说.关闭书耽资源)
     await _停止("cache_daily", 文件缓存.停止每日文件缓存任务, 句柄["cache_daily"])

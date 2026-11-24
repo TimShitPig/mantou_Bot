@@ -6161,32 +6161,7 @@
         }
         return true;
       };
-      const msgMediaArchivePaths = new Set(['/api/message/lanzou-image', '/api/message/quark-media']);
-      const msgMediaArchiveProxy = (item, messageId, scope = {}) => {
-        if (item?.archived !== true || !messageId) return null;
-        const src = msgMediaItemUrl(item);
-        if (![...msgMediaArchivePaths].some((path) => src.startsWith(`${path}?`))) return null;
-        try {
-          const url = new URL(src, 'https://mantou.invalid');
-          if (url.origin !== 'https://mantou.invalid' || !msgMediaArchivePaths.has(url.pathname)
-            || url.searchParams.get('message_id') !== String(messageId)) return null;
-          const rawIndex = url.searchParams.get('media_index') || '';
-          const index = Number(rawIndex), chatId = url.searchParams.get('chat_id') || '', chatType = url.searchParams.get('chat_type') || '';
-          if (!/^\d+$/.test(rawIndex) || !Number.isSafeInteger(index) || !chatId || !['group','user'].includes(chatType)) return null;
-          const expectedId = String(scope.chat_id || scope._session || '').trim();
-          const expectedType = String(scope.chat_type || '').trim();
-          if ((expectedId && expectedId !== chatId) || (expectedType && expectedType !== chatType)) return null;
-          return {index, chatId, chatType, provider:url.pathname === '/api/message/quark-media' ? 'quark' : 'lanzou'};
-        } catch (_) { return null; }
-      };
-      const msgMediaArchiveMatches = (left, right, index, messageId, scope) => {
-        if (!msgMediaMetadataMatches(left, right)) return false;
-        const oldProxy = msgMediaArchiveProxy(left, messageId, scope), newProxy = msgMediaArchiveProxy(right, messageId, scope);
-        if (!oldProxy && !newProxy) return false;
-        if ((oldProxy && oldProxy.index !== index) || (newProxy && newProxy.index !== index)) return false;
-        return !oldProxy || !newProxy || (oldProxy.chatId === newProxy.chatId && oldProxy.chatType === newProxy.chatType);
-      };
-      const mergeMsgMediaItems = (existing, incoming, messageId = '', scope = {}) => {
+      const mergeMsgMediaItems = (existing, incoming) => {
         const items = msgMediaItems(existing), nextItems = msgMediaItems(incoming);
         const oldCount = items.length, matched = new Set(), incomingIndexes = [];
         const matchAll = (matches) => nextItems.forEach((item, nextIndex) => {
@@ -6199,10 +6174,9 @@
         });
         // Resolve specific URLs first, so a missing URL cannot consume another item's slot.
         matchAll((old, item) => Boolean(msgMediaItemUrl(item)) && msgMediaItemUrl(old) === msgMediaItemUrl(item));
-        matchAll((old, item, index) => msgMediaArchiveMatches(old, item, index, messageId, scope));
         matchAll((old, item) => (!msgMediaItemUrl(item) || !msgMediaItemUrl(old)) && msgMediaMetadataMatches(old, item));
         nextItems.forEach((item, nextIndex) => {
-          const index = incomingIndexes[nextIndex], src = msgMediaItemUrl(item);
+          const index = incomingIndexes[nextIndex];
           if (!Number.isInteger(index)) {
             incomingIndexes[nextIndex] = items.length;
             items.push({...item});
@@ -6211,20 +6185,12 @@
           Object.entries(item).forEach(([key, value]) => {
             if (msgMediaHasValue(value) && !msgMediaHasValue(items[index][key])) items[index][key] = value;
           });
-          const nextProxy = msgMediaArchiveProxy(item, messageId, scope);
-          const currentProxy = msgMediaArchiveProxy(items[index], messageId, scope);
-          if (nextProxy?.index === index && !(currentProxy?.provider === 'quark' && nextProxy.provider === 'lanzou')) {
-            items[index].src = src;
-            items[index].archived = true;
-            delete items[index].url;
-            delete items[index].download_url;
-          }
         });
         return {items, incomingIndexes};
       };
-      const mergeMsgRealtimeMedia = (existing, incoming, messageId = '', scope = {}) => {
+      const mergeMsgRealtimeMedia = (existing, incoming) => {
         if (!existing || typeof existing !== 'object') return incoming;
-        const {items, incomingIndexes} = mergeMsgMediaItems(existing, incoming, messageId, scope);
+        const {items, incomingIndexes} = mergeMsgMediaItems(existing, incoming);
         if (!items.length) return existing;
         const result = Array.isArray(existing) ? {} : {...existing};
         if (!Array.isArray(incoming)) Object.entries(incoming).forEach(([key, value]) => {
@@ -6239,7 +6205,7 @@
           });
         }
         // The first item remains the existing slot zero; later metadata cannot replace its URL.
-        ['type','media_type','src','url','download_url','name','filename','file_name','content_type','mime_type','size','width','height','optimistic_data','archived'].forEach((key) => {
+        ['type','media_type','src','url','download_url','name','filename','file_name','content_type','mime_type','size','width','height','optimistic_data'].forEach((key) => {
           if (Object.prototype.hasOwnProperty.call(items[0], key)) result[key] = items[0][key];
           else delete result[key];
         });
@@ -6287,8 +6253,7 @@
           && (!merged.reference_preview || newRaw.length > oldRaw.length)) merged.reference_preview = {...newPreview};
         const oldMedia = merged.media;
         const newMedia = incoming?.media;
-        if (newMedia && typeof newMedia === 'object') merged.media = mergeMsgRealtimeMedia(oldMedia, newMedia,
-          merged.message_id || incoming?.message_id || '', {chat_id:merged.chat_id || merged._session || incoming?.chat_id, chat_type:merged.chat_type || incoming?.chat_type});
+        if (newMedia && typeof newMedia === 'object') merged.media = mergeMsgRealtimeMedia(oldMedia, newMedia);
         if (!merged.message_id && incoming?.message_id) merged.message_id = incoming.message_id;
         if (!merged.id && incoming?.id) merged.id = incoming.id;
         merged.is_self = Boolean(merged.is_self || incoming?.is_self);
@@ -6736,15 +6701,13 @@
           if (img.complete && img.naturalWidth > 0) clearMsgImageFailure(img);
           return;
         }
-        // 状态跟随原节点，实时消息和滚动重绘不会重置自动重试额度。
-        const state = {scope:msgImageScope(), source:img.getAttribute('src') || '', autoRetried:false, timer:null, pending:false};
+        // 状态跟随原节点，实时消息和滚动重绘保留直连回退及手动重试状态。
+        const state = {scope:msgImageScope(), source:img.getAttribute('src') || '', pending:false};
         msgImageRecoveryStates.set(img, state);
         const active = () => img.isConnected && state.scope === msgImageScope()
           && !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
-        const cancelTimer = () => { if (state.timer !== null) clearTimeout(state.timer); state.timer = null; };
         const retry = () => {
           if (!active() || state.pending) return;
-          cancelTimer();
           if (img.dataset.browserMediaKey) {
             // 浏览器私有媒体只重读已有缓存，不将缓存键伪造成网络下载地址。
             browserMediaHydrationKeys.delete(img);
@@ -6761,22 +6724,13 @@
         };
         const loaded = () => {
           if (img.naturalWidth <= 0) return;
-          cancelTimer();
           state.pending = false;
           clearMsgImageFailure(img);
         };
         const failed = () => {
           state.pending = false;
-          if (!active()) { cancelTimer(); markBrowserMediaUnavailable(img); return; }
+          if (!active()) { markBrowserMediaUnavailable(img); return; }
           const current = msgImageUrl(img.getAttribute('src'));
-          // 归档读取偶发失败时只自动重试一次；QQ 代理仍沿用原来的一次直连。
-          if (!img.dataset.browserMediaKey && current?.origin === location.origin
-            && msgMediaArchivePaths.has(current.pathname) && !state.autoRetried) {
-            state.autoRetried = true;
-            markBrowserMediaUnavailable(img);
-            state.timer = setTimeout(() => { state.timer = null; retry(); }, 350);
-            return;
-          }
           const direct = msgImageUrl(img.dataset.mediaDirect || '');
           if (!img.dataset.browserMediaKey && direct && !img.dataset.mediaDirectTried
             && direct.href !== current?.href) {
