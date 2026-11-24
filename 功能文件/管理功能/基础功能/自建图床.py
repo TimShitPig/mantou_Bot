@@ -22,8 +22,6 @@ from PIL import Image
 
 
 图床地址 = "https://mantou-imgbed.pages.dev"
-图片大小上限 = 10 * 1024 * 1024
-文件大小上限 = 800 * 1024 * 1024
 上传分片大小 = 16 * 1024 * 1024
 _响应上限 = 64 * 1024
 _图片类型 = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "WEBP": "image/webp"}
@@ -46,7 +44,7 @@ class 图床错误(RuntimeError):
 
 def 读取图片资料(数据: bytes) -> dict[str, Any]:
     """只读取格式与尺寸，保留动画和原始图片字节。"""
-    if not isinstance(数据, bytes) or not 数据 or len(数据) > 图片大小上限:
+    if not isinstance(数据, bytes) or not 数据:
         raise 图床错误("image_size")
     try:
         with Image.open(io.BytesIO(数据)) as 图片:
@@ -115,15 +113,13 @@ def _文件状态(文件) -> tuple[int, int, int, int] | None:
 
 def _文件摘要(文件) -> tuple[int, str, tuple[int, int, int, int] | None]:
     初始状态 = _文件状态(文件)
-    if 初始状态 is not None and not 0 < 初始状态[2] <= 文件大小上限:
+    if 初始状态 is not None and 初始状态[2] <= 0:
         raise 图床错误("file_size")
     摘要 = hashlib.sha256()
     大小 = 0
     文件.seek(0)
     while 块 := 文件.read(1024 * 1024):
         大小 += len(块)
-        if 大小 > 文件大小上限:
-            raise 图床错误("file_size")
         摘要.update(块)
     if 大小 <= 0:
         raise 图床错误("file_size")
@@ -166,7 +162,7 @@ def _规范文件名(文件名: Any) -> str:
 
 def _准备进度(旧进度, 资料: dict[str, Any], 上传Token: str) -> dict[str, Any]:
     绑定 = {
-        **资料, "total_chunks": math.ceil(资料["size"] / 上传分片大小),
+        **资料, "total_chunks": (资料["size"] + 上传分片大小 - 1) // 上传分片大小,
         "token_fingerprint": hashlib.sha256(上传Token.encode("utf-8")).hexdigest(),
     }
     if 旧进度 is not None and not isinstance(旧进度, dict):
@@ -402,7 +398,7 @@ async def 上传文件(
     路径, 上传Token: str, *, 文件名: str = "", 媒体种类: str = "file",
     提交前=None, 进度回调=None, 进度=None,
 ) -> dict[str, Any]:
-    """最多800MiB，分片有界读取；只从已确认的下一片继续，不自动重放提交。"""
+    """分片有界读取；只从已确认的下一片继续，不自动重放提交。"""
     try:
         文件路径 = Path(路径)
         名称 = 文件名 or 文件路径.name
@@ -422,5 +418,33 @@ async def 上传图片(数据: bytes, 上传Token: str) -> dict[str, Any]:
     资料 = await _在线程执行(读取图片资料, 数据)
     结果 = await _上传源(
         lambda: io.BytesIO(数据), 上传Token, 资料["file_name"], "image", 资料["content_type"],
+    )
+    return {**结果, "width": 资料["width"], "height": 资料["height"]}
+
+
+def _读取图片文件资料(路径: Path) -> dict[str, Any]:
+    """只读文件头的格式与尺寸，不展开像素或整份读取图片。"""
+    try:
+        with Image.open(路径) as 图片:
+            格式 = str(图片.format or "").upper()
+            宽, 高 = 图片.size
+    except Exception:
+        raise 图床错误("image_format") from None
+    if 格式 not in _图片类型 or 宽 <= 0 or 高 <= 0:
+        raise 图床错误("image_format")
+    return {"content_type": _图片类型[格式], "width": 宽, "height": 高}
+
+
+async def 上传图片文件(路径, 上传Token: str, *, 文件名: str = "") -> dict[str, Any]:
+    """图片文件入口保留原字节，以固定大小分片上传并附上实际尺寸。"""
+    _校验Token(上传Token)
+    try:
+        文件路径 = Path(路径)
+    except (TypeError, ValueError):
+        raise 图床错误("file_path") from None
+    名称 = _规范文件名(文件名 or 文件路径.name)
+    资料 = await _在线程执行(_读取图片文件资料, 文件路径)
+    结果 = await _上传源(
+        lambda: 文件路径.open("rb"), 上传Token, 名称, "image", 资料["content_type"],
     )
     return {**结果, "width": 资料["width"], "height": 资料["height"]}

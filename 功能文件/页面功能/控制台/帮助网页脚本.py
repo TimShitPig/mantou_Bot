@@ -2588,13 +2588,19 @@
       };
       const msgMatchesCurrent = (type, id, appid) => msgState.chatType === type && msgState.chatId === String(id || '')
         && Boolean(appid) && String(appid) === msgState.chatAppid && String(appid) === msgState.selectedAppid;
-      const composerHasImage = () => Boolean(String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
+      let composerImageObjectUrl = '';
+      const releaseComposerImagePreview = () => {
+        if (composerImageObjectUrl) URL.revokeObjectURL(composerImageObjectUrl);
+        composerImageObjectUrl = '';
+      };
+      const composerHasImage = () => Boolean(msgState.pastedImageFile || String(msgState.pastedImage || '').trim() || String(msgState.pastedImageSource || '').trim());
       const composerHasMedia = () => Boolean((msgState.mediaFile || String(msgState.mediaData || '').trim()) && Number(msgState.mediaType || 0));
       const composerImageMarker = '\uFFFC';
       const getComposerEditor = () => $('msg-editor');
       const syncComposerImageState = () => {
         const editor = getComposerEditor();
         if (composerHasImage() && !editor?.querySelector('[data-composer-image="1"]')) {
+          releaseComposerImagePreview();
           msgState.pastedImage = null;
           msgState.pastedImageFile = null;
           msgState.pastedImageSource = '';
@@ -6335,9 +6341,10 @@
         const content = imageParts.join('').trim();
         const imageData = String(payload.image_data || '').trim();
         const imageUrl = safeImageSource(payload.image_url);
+        const imageFile = typeof File !== 'undefined' && payload.image_file instanceof File ? payload.image_file : null;
         const imageBefore = imageParts.length > 1 ? imageParts[0].trim() : String(payload.image_before || '').trim();
         const imageAfter = imageParts.length > 1 ? imageParts.slice(1).join(composerImageMarker).trim() : String(payload.image_after || '').trim();
-        const imageType = imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
+        const imageType = imageFile?.type || imageData.match(/^data:([^;,]+)/i)?.[1] || 'image/png';
          const mediaData = String(payload.media_data || '').trim();
          const mediaFile = typeof File !== 'undefined' && payload.media_file instanceof File ? payload.media_file : null;
          const mediaType = Number(payload.media_file_type || 4) === 2 ? '视频' : '文件';
@@ -6359,8 +6366,8 @@
             ? {message_id:msgState.quote.id, refidx:msgState.quote.refidx, user_id:msgState.quote.userId, nickname:msgState.quote.name, nickname_blank:msgState.quote.nickname_blank, content:msgState.quote.text} : null,
           media: imageData
             ? {type:'图片', content_type:imageType, optimistic_data:imageData, text:content, before_text:imageBefore, after_text:imageAfter}
-            : (imageUrl
-              ? {type:'图片', content_type:'image/*', src:imageUrl, text:content, before_text:imageBefore, after_text:imageAfter}
+            : (imageFile || imageUrl
+              ? {type:'图片', content_type:imageType, src:imageFile ? browserMediaMarker(payload.browser_media_key) : imageUrl, text:content, before_text:imageBefore, after_text:imageAfter}
               : ((mediaData || mediaFile) ? {type:mediaType, content_type:mediaMime, name:mediaName, optimistic_data:mediaData, text:content} : null)),
         };
         const entry = {
@@ -6411,6 +6418,7 @@
       };
       const resetComposer = () => {
         closeComposerMentionPicker();
+        releaseComposerImagePreview();
         const editor = getComposerEditor();
         if (editor) editor.replaceChildren();
         msgState.quote = null;
@@ -6983,9 +6991,8 @@
       const setComposerImage = (data, source, preview = '', file = null) => {
         const imageData = String(data || '');
         const mime = String(file?.type || /^data:([^;,]+)/i.exec(imageData)?.[1] || '').toLowerCase();
-        const size = file ? Number(file.size || 0) : (imageData.startsWith('data:') ? Math.floor((imageData.split(',')[1] || '').length * 3 / 4) - (/==$/.test(imageData) ? 2 : /=\s*$/.test(imageData) ? 1 : 0) : 0);
         if (mime && !['image/png','image/jpeg','image/gif','image/webp'].includes(mime)) { toast('图片仅支持 PNG、JPEG、GIF 或 WebP'); return false; }
-        if (size > 10 * 1024 * 1024) { toast('图片不能超过 10 MB'); return false; }
+        releaseComposerImagePreview();
         clearComposerMedia();
         msgState.pastedImage = String(data || '');
         msgState.pastedImageFile = file && typeof File !== 'undefined' && file instanceof File ? file : null;
@@ -6994,6 +7001,20 @@
         if (inlineSource) insertComposerImage(inlineSource);
         getComposerEditor()?.focus();
         return true;
+      };
+      const setComposerImageFile = (file) => {
+        const preview = URL.createObjectURL(file);
+        if (!setComposerImage('', '', preview, file)) {
+          URL.revokeObjectURL(preview);
+          return false;
+        }
+        composerImageObjectUrl = preview;
+        return true;
+      };
+      const setComposerImageBlob = (blob) => {
+        const mime = String(blob.type || '').toLowerCase();
+        const extension = ({'image/png':'png','image/jpeg':'jpg','image/gif':'gif','image/webp':'webp'})[mime] || 'png';
+        return setComposerImageFile(new File([blob], `image.${extension}`, {type:mime}));
       };
       const setComposerMedia = (data, name, fileType, mime = '', file = null) => {
         const editor = getComposerEditor();
@@ -7032,9 +7053,7 @@
       };
       const readComposerMediaFile = (file, fileType) => {
         if (!file) return;
-        const maxBytes = 200 * 1024 * 1024;
         if (Number(file.size || 0) <= 0) return toast('文件为空，无法发送');
-        if (Number(file.size || 0) > maxBytes) return toast('文件超过 200 MB 限制');
         if (Number(fileType) === 2 && String(file.type || '').toLowerCase() !== 'video/mp4' && !/\.mp4$/i.test(String(file.name || ''))) return toast('视频只支持 MP4 格式');
         setComposerMedia('', file.name, Number(fileType) === 2 ? 2 : 4, file.type, file);
         toast(`${Number(fileType) === 2 ? '视频' : '文件'}已添加，可继续输入说明后发送`);
@@ -7066,8 +7085,7 @@
         if (!url.startsWith('data:')) {
           const proxy = mediaProxyUrl(url, 'image') || url;
           try {
-            const dataUrl = await blobToDataUrl(await fetchImageBlob(proxy));
-            if (setComposerImage(dataUrl, '', dataUrl, null)) toast('图片已读取，可继续输入文字后发送');
+            if (setComposerImageBlob(await fetchImageBlob(proxy))) toast('图片已读取，可继续输入文字后发送');
           } catch (_) {
             setComposerImage('', url, proxy);
             toast('图片已添加，可继续输入文字后发送');
@@ -7075,8 +7093,7 @@
           return;
         }
         try {
-          const dataUrl = await blobToDataUrl(await fetchImageBlob(url));
-          if (setComposerImage(dataUrl, '', dataUrl, null)) toast('图片已添加，可继续输入文字后发送');
+          if (setComposerImageBlob(await fetchImageBlob(url))) toast('图片已添加，可继续输入文字后发送');
         } catch (_) {
           toast('图片读取失败，请重新拖入');
         }
@@ -9370,11 +9387,7 @@
           if (item.type && item.type.indexOf('image/') === 0) {
             const file = item.getAsFile();
             if (!file) continue;
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (setComposerImage(reader.result, '', reader.result, file)) toast('已粘贴图片，可继续输入文字后发送');
-            };
-            reader.readAsDataURL(file);
+            if (setComposerImageFile(file)) toast('已粘贴图片，可继续输入文字后发送');
             e.preventDefault();
             return;
           }
@@ -9396,9 +9409,8 @@
         }
         const proxy = mediaProxyUrl(pastedSource, 'image') || pastedSource;
         void fetchImageBlob(proxy)
-          .then((blob) => blobToDataUrl(blob))
-          .then((dataUrl) => {
-            if (setComposerImage(dataUrl, '', dataUrl, dataUrlToFile(dataUrl))) toast('已粘贴图片，可单独发送或继续输入文字');
+          .then((blob) => {
+            if (setComposerImageBlob(blob)) toast('已粘贴图片，可单独发送或继续输入文字');
           })
           .catch(() => {
             setComposerImage('', pastedSource, proxy);
@@ -9428,10 +9440,7 @@
         const droppedFile = transfer?.files?.[0];
         if (droppedFile) {
           if (String(droppedFile.type || '').toLowerCase().startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = () => setComposerImage(String(reader.result || ''), '', String(reader.result || ''), droppedFile);
-            reader.onerror = () => toast('图片读取失败，请重试');
-            reader.readAsDataURL(droppedFile);
+            setComposerImageFile(droppedFile);
           } else {
             readComposerMediaFile(droppedFile, String(droppedFile.type || '').toLowerCase().startsWith('video/') ? 2 : 4);
           }
@@ -9444,6 +9453,7 @@
       });
       const clearMsgImage = () => {
         getComposerEditor()?.querySelector('[data-composer-image="1"]')?.remove();
+        releaseComposerImagePreview();
         msgState.pastedImage = null;
         msgState.pastedImageFile = null;
         msgState.pastedImageSource = '';
@@ -9456,9 +9466,7 @@
         const file = e.target.files && e.target.files[0];
         if (!file) return;
         if (!file.type.startsWith('image/')) { toast('请选择图片文件'); e.target.value = ''; return; }
-        const reader = new FileReader();
-        reader.onload = () => { setComposerImage(reader.result, '', reader.result, file); };
-        reader.readAsDataURL(file);
+        setComposerImageFile(file);
         e.target.value = '';
       });
       $('msg-video-file').addEventListener('change', (e) => {

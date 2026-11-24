@@ -4926,20 +4926,11 @@ async def _准备图床本地来源(来源: Any) -> dict[int, dict[str, Any]]:
                 continue
             项 = dict(原项)
             if isinstance(项.get("data"), bytes):
-                if len(项["data"]) > 800 * 1024 * 1024:
-                    结果[索引] = {**{键: 值 for 键, 值 in 项.items() if 键 not in {"path", "data"}},
-                                  "too_large": True, "size": len(项["data"])}
-                else:
-                    结果[索引] = {**项, "owned": True}
+                结果[索引] = {**项, "owned": True}
                 continue
             if not 项.get("path"):
                 continue
             原路径 = Path(项["path"])
-            原大小 = await asyncio.to_thread(lambda: 原路径.stat().st_size)
-            if 原大小 > 800 * 1024 * 1024:
-                结果[索引] = {**{键: 值 for 键, 值 in 项.items() if 键 not in {"path", "data"}},
-                              "too_large": True, "size": 原大小}
-                continue
             新路径 = 文件缓存.创建临时缓存文件("mantou-imgbed-", 原路径.suffix[:12])
             文件缓存.标记临时缓存正在使用(新路径)
             def 复制() -> int:
@@ -4950,13 +4941,11 @@ async def _准备图床本地来源(来源: Any) -> dict[int, dict[str, Any]]:
                         if not 块:
                             return 已读
                         已读 += len(块)
-                        if 已读 > 800 * 1024 * 1024:
-                            raise ValueError("imgbed_source_too_large")
                         输出.write(块)
             任务 = asyncio.create_task(asyncio.to_thread(复制))
             try:
                 大小 = await asyncio.shield(任务)
-            except BaseException as exc:
+            except BaseException:
                 while not 任务.done():
                     try:
                         await asyncio.shield(任务)
@@ -4967,10 +4956,6 @@ async def _准备图床本地来源(来源: Any) -> dict[int, dict[str, Any]]:
                 if not 任务.cancelled():
                     任务.exception()
                 _清理图床本地来源({索引: {"path": str(新路径), "owned": True}})
-                if isinstance(exc, ValueError) and str(exc) == "imgbed_source_too_large":
-                    结果[索引] = {**{键: 值 for 键, 值 in 项.items() if 键 not in {"path", "data"}},
-                                  "too_large": True, "size": max(原大小, 800 * 1024 * 1024 + 1)}
-                    continue
                 raise
             结果[索引] = {**项, "path": str(新路径), "size": 大小, "owned": True}
         return 结果
@@ -8950,12 +8935,21 @@ async def _上传媒体(
 
     if 文件字节 is None and 地址 and Path(地址).is_file():
         try:
-            with open(地址, "rb") as 文件句柄:
-                文件字节 = 文件句柄.read()
+            文件大小 = await _等待媒体文件线程(lambda: Path(地址).stat().st_size)
+            if 文件大小 <= 0:
+                return ""
+            if 文件大小 > 10 * 1024 * 1024:
+                return await _上传媒体分片(_http, 会话标识, 类型, 文件类型, 文件名, 文件路径=地址)
+            def 读取小文件() -> bytes:
+                with Path(地址).open("rb") as 文件:
+                    return 文件.read(10 * 1024 * 1024 + 1)
+            文件字节 = await _等待媒体文件线程(读取小文件)
+            if len(文件字节) > 10 * 1024 * 1024:
+                return await _上传媒体分片(_http, 会话标识, 类型, 文件类型, 文件名, 文件路径=地址)
         except OSError:
             return ""
     if 文件字节 is not None:
-        if len(文件字节) <= 0 or len(文件字节) > 200 * 1024 * 1024:
+        if len(文件字节) <= 0:
             return ""
         if len(文件字节) <= 10 * 1024 * 1024:
             return await _上传媒体单请求(
@@ -9034,23 +9028,115 @@ async def _上传媒体单请求(
     return ""
 
 
+async def _等待媒体文件线程(函数: Any, *参数: Any) -> Any:
+    """取消也等待实际文件操作收尾，避免清理仍在读取的发送源。"""
+    任务 = asyncio.create_task(asyncio.to_thread(函数, *参数))
+    try:
+        return await asyncio.shield(任务)
+    except asyncio.CancelledError:
+        while not 任务.done():
+            try:
+                await asyncio.shield(任务)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not 任务.cancelled():
+            任务.exception()
+        raise
+
+
 async def _上传媒体分片(
     _http: Any,
     会话标识: str,
     类型: str,
     文件类型: int,
     文件名: str,
-    文件字节: bytes,
+    文件字节: bytes | None = None,
+    *, 文件路径: str = "",
 ) -> str:
     """执行官方 upload_prepare、分片 PUT、part_finish 和合并流程。"""
     if ClientSession is None or ClientTimeout is None:
         return ""
     from botpy.http import Route
 
-    文件大小 = len(文件字节)
-    文件MD5 = hashlib.md5(文件字节).hexdigest()
-    文件SHA1 = hashlib.sha1(文件字节).hexdigest()
-    前十MBMD5 = hashlib.md5(文件字节[:10002432]).hexdigest()
+    块字节数 = 1024 * 1024
+    源路径 = Path(文件路径) if 文件路径 else None
+    初始状态 = None
+
+    def 文件状态(文件: Any) -> tuple[int, int, int, int]:
+        状态 = os.fstat(文件.fileno())
+        return 状态.st_dev, 状态.st_ino, 状态.st_size, 状态.st_mtime_ns
+
+    def 摘要() -> tuple[int, str, str, str, Any]:
+        MD5, SHA1, 前十MD5 = hashlib.md5(), hashlib.sha1(), hashlib.md5()
+        大小 = 0
+        def 加入(块: Any) -> None:
+            nonlocal 大小
+            MD5.update(块)
+            SHA1.update(块)
+            if 大小 < 10002432:
+                前十MD5.update(块[:max(0, 10002432 - 大小)])
+            大小 += len(块)
+        if 源路径 is not None:
+            with 源路径.open("rb") as 文件:
+                状态 = 文件状态(文件)
+                while 块 := 文件.read(块字节数):
+                    加入(块)
+                if 文件状态(文件) != 状态 or 大小 != 状态[2]:
+                    raise RuntimeError("媒体文件已变化")
+        else:
+            状态 = None
+            if 文件字节 is None:
+                raise RuntimeError("媒体数据无效")
+            视图 = memoryview(文件字节)
+            for 偏移 in range(0, len(视图), 块字节数):
+                加入(视图[偏移:偏移 + 块字节数])
+        if 大小 <= 0:
+            raise RuntimeError("媒体数据无效")
+        return 大小, MD5.hexdigest(), SHA1.hexdigest(), 前十MD5.hexdigest(), 状态
+
+    文件大小, 文件MD5, 文件SHA1, 前十MBMD5, 初始状态 = await _等待媒体文件线程(摘要)
+
+    def 读取范围(起点: int, 长度: int) -> bytes:
+        with 源路径.open("rb") as 文件:
+            if 文件状态(文件) != 初始状态:
+                raise RuntimeError("媒体文件已变化")
+            文件.seek(起点)
+            数据 = 文件.read(长度)
+            if len(数据) != 长度 or 文件状态(文件) != 初始状态:
+                raise RuntimeError("媒体文件已变化")
+            return 数据
+
+    async def 分片数据流(起点: int, 长度: int):
+        for 偏移 in range(0, 长度, 块字节数):
+            本次长度 = min(块字节数, 长度 - 偏移)
+            if 源路径 is not None:
+                yield await _等待媒体文件线程(读取范围, 起点 + 偏移, 本次长度)
+            else:
+                yield memoryview(文件字节)[起点 + 偏移:起点 + 偏移 + 本次长度]
+
+    def 分片摘要(起点: int, 长度: int) -> str:
+        MD5 = hashlib.md5()
+        if 源路径 is not None:
+            with 源路径.open("rb") as 文件:
+                if 文件状态(文件) != 初始状态:
+                    raise RuntimeError("媒体文件已变化")
+                文件.seek(起点)
+                余量 = 长度
+                while 余量:
+                    块 = 文件.read(min(块字节数, 余量))
+                    if not 块:
+                        raise RuntimeError("媒体文件已变化")
+                    MD5.update(块)
+                    余量 -= len(块)
+                if 文件状态(文件) != 初始状态:
+                    raise RuntimeError("媒体文件已变化")
+        else:
+            视图 = memoryview(文件字节)
+            for 偏移 in range(0, 长度, 块字节数):
+                MD5.update(视图[起点 + 偏移:起点 + min(长度, 偏移 + 块字节数)])
+        return MD5.hexdigest()
     if 类型 == "user":
         预上传路由 = Route("POST", "/v2/users/{user_id}/upload_prepare", user_id=会话标识)
         分片完成路由模板 = "/v2/users/{user_id}/upload_part_finish"
@@ -9101,13 +9187,13 @@ async def _上传媒体分片(
         except (TypeError, ValueError):
             分片大小 = 默认分片大小
         起点 = 分片序号 * 默认分片大小
-        数据 = 文件字节[起点 : min(文件大小, 起点 + 分片大小)]
-        if not 预签名地址 or not 数据:
+        长度 = min(文件大小 - 起点, 分片大小)
+        if not 预签名地址 or 起点 < 0 or 起点 >= 文件大小 or 长度 <= 0:
             raise RuntimeError("分片数据无效")
-        分片MD5 = hashlib.md5(数据).hexdigest()
+        分片MD5 = await _等待媒体文件线程(分片摘要, 起点, 长度)
         for 次数 in range(3):
             try:
-                async with 客户端.put(预签名地址, data=数据) as 响应:
+                async with 客户端.put(预签名地址, data=分片数据流(起点, 长度), headers={"Content-Length": str(长度)}) as 响应:
                     if not 200 <= 响应.status < 300:
                         raise RuntimeError(f"分片上传 HTTP {响应.status}")
                 await _http.request(
@@ -9119,7 +9205,7 @@ async def _上传媒体分片(
                     json={
                         "upload_id": 上传ID,
                         "part_index": 分片序号,
-                        "block_size": str(len(数据)),
+                        "block_size": str(长度),
                         "md5": 分片MD5,
                     },
                 )
@@ -9139,7 +9225,16 @@ async def _上传媒体分片(
         timeout=ClientTimeout(total=300, connect=20, sock_read=300),
         trust_env=False,
     ) as 客户端:
-        await asyncio.gather(*(限制上传(客户端, 分片) for 分片 in 分片列表))
+        if hasattr(客户端, "_retry_connection"):
+            客户端._retry_connection = False
+        任务列表 = [asyncio.create_task(限制上传(客户端, 分片)) for 分片 in 分片列表]
+        try:
+            await asyncio.gather(*任务列表)
+        finally:
+            for 任务 in 任务列表:
+                if not 任务.done():
+                    任务.cancel()
+            await asyncio.gather(*任务列表, return_exceptions=True)
     合并 = await _http.request(
         合并路由,
         json={
@@ -9315,18 +9410,16 @@ async def 发送消息(
     图片后文本 = str(图片后文本 or "").strip()
     图片文件名 = str(图片文件名 or "").strip()
     图片字节: bytes | None = None
+    图片路径来源 = ""
     if 图片路径:
         图片路径值 = Path(str(图片路径).strip())
         try:
             文件大小 = 图片路径值.stat().st_size
         except OSError:
             return {"ok": False, "message": "图片数据无效"}
-        if 文件大小 <= 0 or 文件大小 > 10 * 1024 * 1024:
+        if 文件大小 <= 0 or not 图片路径值.is_file():
             return {"ok": False, "message": "图片数据无效"}
-        try:
-            图片字节 = await asyncio.to_thread(图片路径值.read_bytes)
-        except OSError:
-            return {"ok": False, "message": "图片数据无效"}
+        图片路径来源 = str(图片路径值.absolute())
         图片文件名 = 图片文件名 or 图片路径值.name or "image.png"
     if not 图片文件名:
         图片文件名 = "image.png"
@@ -9340,9 +9433,13 @@ async def 发送消息(
             if 图片数据.startswith("data:") and "," in 图片数据:
                 图片数据 = 图片数据.split(",", 1)[1]
             图片字节 = base64.b64decode(图片数据)
+            if not 图片字节:
+                return {"ok": False, "message": "图片数据无效"}
+            图片路径来源 = ""
         except Exception:
             return {"ok": False, "message": "图片数据无效"}
 
+    有本地图片 = bool(图片路径来源) or 图片字节 is not None
     媒体字节: bytes | None = None
     if 媒体数据:
         媒体原始数据 = str(媒体数据 or "").strip()
@@ -9352,8 +9449,8 @@ async def 发送消息(
             媒体字节 = base64.b64decode(媒体原始数据, validate=True)
         except Exception:
             return {"ok": False, "message": "媒体数据无效"}
-        if len(媒体字节) <= 0 or len(媒体字节) > 200 * 1024 * 1024:
-            return {"ok": False, "message": "媒体文件过大"}
+        if len(媒体字节) <= 0:
+            return {"ok": False, "message": "媒体数据无效"}
 
     图片占位标记 = str(图片占位标记 or "\ufffc")
     富媒体文字内容 = _媒体文字去占位(内容, 图片占位标记)
@@ -9364,14 +9461,17 @@ async def 发送消息(
     图片宽度, 图片高度 = 640, 480
     图床本地来源: dict[int, dict[str, Any]] = {}
     已上传图床结果: dict[int, dict[str, Any]] = {}
-    if 图片字节 is not None and 类型 in ("text", "markdown"):
+    if 有本地图片 and 类型 in ("text", "markdown"):
         try:
             from 功能文件.管理功能.基础功能 import 自建图床, 机器人作用域
 
             图片配置 = 机器人作用域.获取机器人配置(当前插件配置, appid)
             基础设置 = 图片配置.get("basic_settings", {}) if isinstance(图片配置, dict) else {}
             上传密码 = 基础设置.get("image_host_token", "") if isinstance(基础设置, dict) else ""
-            图片结果 = await 自建图床.上传图片(图片字节, 上传密码)
+            if 图片路径来源:
+                图片结果 = await 自建图床.上传图片文件(图片路径来源, 上传密码, 文件名=图片文件名)
+            else:
+                图片结果 = await 自建图床.上传图片(图片字节, 上传密码)
             Markdown图片地址 = 图片结果["url"]
             图片宽度, 图片高度 = 图片结果["width"], 图片结果["height"]
             已上传图床结果[0] = 图片结果
@@ -9383,8 +9483,6 @@ async def 发送消息(
                 getattr(异常, "stage", "request"), getattr(异常, "status", None) or "none",
                 type(异常).__name__,
             )
-            if getattr(异常, "stage", "") == "image_size":
-                return {"ok": False, "message": "Markdown 图片须在 10MB 以内"}
             if getattr(异常, "stage", "") == "image_format":
                 return {"ok": False, "message": "Markdown 图片仅支持 PNG、JPEG、GIF、WebP"}
             if getattr(异常, "stage", "") == "not_configured":
@@ -9396,8 +9494,9 @@ async def 发送消息(
         nonlocal 图片记录地址, 媒体记录地址, 图床本地来源
         if not 图床本地来源 and not 已上传图床结果:
             来源: dict[str, Any] = {}
-            if 图片字节 is not None:
-                来源 = {"data": 图片字节, "original_name": 图片文件名, "media_kind": "image", "content_type": "image"}
+            if 有本地图片:
+                来源 = {"original_name": 图片文件名, "media_kind": "image", "content_type": "image"}
+                来源["path" if 图片路径来源 else "data"] = 图片路径来源 or 图片字节
             elif 媒体字节 is not None or 媒体路径:
                 来源 = {"original_name": str(媒体文件名 or ""), "content_type": str(媒体内容类型 or ""),
                       "media_kind": {2: "video", 3: "audio"}.get(int(媒体文件类型 or 4), "file")}
@@ -9410,7 +9509,7 @@ async def 发送消息(
             地址,
         ):
             return
-        if 图片字节 is not None:
+        if 有本地图片:
             图片记录地址 = 地址
         elif 媒体字节 is not None and not 媒体记录地址:
             媒体记录地址 = 地址
@@ -9482,13 +9581,14 @@ async def 发送消息(
         消息体["markdown"]["force_verify_image_resource"] = True
     else:
         # 没有公网图片地址时，下面改用官方富媒体消息。
-        if (图片字节 is not None or 图片公开地址) and 类型 == "markdown":
+        if (有本地图片 or 图片公开地址) and 类型 == "markdown":
             类型 = "text"
-    if not 图文内容 and (图片字节 is not None or 图片公开地址):
+    if not 图文内容 and (有本地图片 or 图片公开地址):
         file_info = await _上传媒体(
             _http,
             会话标识,
             会话类型 or "group",
+            文件路径=图片路径来源,
             文件URL=图片公开地址,
             文件类型=1,
             文件字节=图片字节,
@@ -9619,7 +9719,7 @@ async def 发送消息(
                     响应ID = str(结果.get("id") or "")
                     await _保存本地发送媒体记录()
                     展示内容 = str(内容 or "").replace(图片占位标记, "").strip() if 图文内容 else 内容
-                    if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
+                    if 消息体.get("msg_type") == 7 and (有本地图片 or 图片公开地址):
                         清理文本 = str(内容 or "").replace(图片占位标记, "").strip()
                         展示内容 = "[图片]" if not 清理文本 else "[图片] " + 清理文本
                     if 类型 == "media":
@@ -9631,7 +9731,7 @@ async def 发送消息(
                     媒体记录 = None
                     if 图文内容:
                         媒体记录 = _图片媒体记录()
-                    elif 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
+                    elif 消息体.get("msg_type") == 7 and (有本地图片 or 图片公开地址):
                         媒体记录 = _图片媒体记录()
                     elif 类型 == "media":
                         媒体记录 = _普通媒体记录()
@@ -9668,7 +9768,7 @@ async def 发送消息(
         响应ID = str(getattr(结果, "id", None) or "")
     await _保存本地发送媒体记录()
     展示内容 = str(内容 or "").replace(图片占位标记, "").strip() if 图文内容 else 内容
-    if 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
+    if 消息体.get("msg_type") == 7 and (有本地图片 or 图片公开地址):
         清理文本 = str(内容 or "").replace(图片占位标记, "").strip()
         展示内容 = "[图片]" if not 清理文本 else "[图片] " + 清理文本
     if 类型 == "media":
@@ -9680,7 +9780,7 @@ async def 发送消息(
     媒体记录 = None
     if 图文内容:
         媒体记录 = _图片媒体记录()
-    elif 消息体.get("msg_type") == 7 and (图片字节 is not None or 图片公开地址):
+    elif 消息体.get("msg_type") == 7 and (有本地图片 or 图片公开地址):
         媒体记录 = _图片媒体记录()
     elif 类型 == "media":
         媒体记录 = _普通媒体记录()

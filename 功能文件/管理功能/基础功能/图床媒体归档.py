@@ -25,7 +25,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 
-最大文件字节数 = 800 * 1024 * 1024
 最大并发数 = 8
 _QQ主机后缀 = ("qq.com", "qq.com.cn", "qpic.cn", "qlogo.cn")
 _图床主机 = "mantou-imgbed.pages.dev"
@@ -289,6 +288,63 @@ def _提交未知(归档: Any) -> bool:
     return 归档.get("status") == "unknown" or isinstance(进度, dict) and 进度.get("submitted") is True and 进度.get("confirmed") is not True
 
 
+def _旧大小拒绝可恢复(归档: Any) -> bool:
+    """只恢复旧客户端在任何上传提交之前作出的大小拒绝。"""
+    if (not isinstance(归档, dict) or 归档.get("status") != "failed"
+            or 归档.get("error_stage") not in {"source_too_large", "file_size", "image_size"}
+            or _提交未知(归档) or _图床地址(归档.get("url"))):
+        return False
+    进度 = 归档.get("progress")
+    if 进度 is None or isinstance(进度, dict) and not 进度:
+        return True
+    return (isinstance(进度, dict) and 进度.get("submitted") is False and 进度.get("confirmed") is True
+            and 进度.get("operation", "prepare") == "prepare" and 进度.get("stage", "ready") == "ready"
+            and type(进度.get("next_chunk", 0)) is int and 进度.get("next_chunk", 0) == 0 and not 进度.get("upload_id"))
+
+
+def _解除旧大小拒绝(参数: dict[str, Any]) -> bool:
+    当前 = 参数.get("archive")
+    if _提交未知(当前) or isinstance(当前, dict) and 当前.get("error_stage") == "source_expired":
+        return False
+    if isinstance(当前, dict):
+        if 当前.get("status") in {"stored", "saved"} or 当前.get("url"):
+            return False
+        进度 = 当前.get("progress")
+        if 进度 is not None and not (isinstance(进度, dict) and not 进度):
+            if (not isinstance(进度, dict) or 进度.get("submitted") is not False or 进度.get("confirmed") is not True
+                    or 进度.get("operation", "prepare") != "prepare" or 进度.get("next_chunk", 0) != 0 or 进度.get("upload_id")):
+                return False
+    待保存 = 参数.get("pending_state")
+    if not _旧大小拒绝可恢复(当前) and not _旧大小拒绝可恢复(待保存):
+        return False
+    参数.pop("terminal", None)
+    参数.pop("source_failures", None)
+    参数.pop("last_error", None)
+    参数["retry_at"] = 0.0
+    if _旧大小拒绝可恢复(待保存):
+        参数.pop("pending_state", None)
+    return True
+
+
+def _旧大小拒绝仍需保护(归档: Any) -> bool:
+    return (isinstance(归档, dict) and 归档.get("status") == "failed"
+            and 归档.get("error_stage") in {"source_too_large", "file_size", "image_size"}
+            and not _旧大小拒绝可恢复(归档))
+
+
+def _本地来源去旧大小标记(参数: dict[str, Any]) -> None:
+    本地 = 参数.get("local")
+    if not isinstance(本地, dict) or 本地.get("too_large") is not True:
+        return
+    if 本地.get("path") or isinstance(本地.get("data"), (bytes, bytearray, memoryview)):
+        本地 = dict(本地)
+        本地.pop("too_large", None)
+        参数["local"] = 本地
+    else:
+        # 旧版只保留了超限标记，原件不可伪造；有远端附件地址时交给下载流程。
+        参数.pop("local", None)
+
+
 def _清理进度(进度: Any) -> dict[str, Any]:
     if not isinstance(进度, dict):
         return {}
@@ -492,14 +548,10 @@ async def _下载会话来源(会话: Any, 地址: str, 路径: Path, *, 允许�
                 过期 = await _源已过期(响应)
                 raise 图床归档错误("source_expired" if 过期 else "source_http", 响应.status)
             总长度 = 响应.content_length
-            if 总长度 is not None and 总长度 > 最大文件字节数:
-                raise 图床归档错误("source_too_large", 响应.status)
             已读 = 0
             with 路径.open("wb") as 文件:
                 async for 块 in 响应.content.iter_chunked(65536):
                     已读 += len(块)
-                    if 已读 > 最大文件字节数:
-                        raise 图床归档错误("source_too_large", 响应.status)
                     await _写文件块(文件, 块)
             if 已读 <= 0 or 总长度 is not None and 已读 != 总长度:
                 raise 图床归档错误("source_incomplete", 响应.status)
@@ -511,6 +563,7 @@ async def _下载会话来源(会话: Any, 地址: str, 路径: Path, *, 允许�
 
 async def _准备本地文件(参数: dict[str, Any]) -> Path:
     from . import 文件缓存
+    _本地来源去旧大小标记(参数)
     已有 = 参数.get("archive")
     本地 = 参数.get("local")
     if isinstance(本地, dict) and 本地.get("complete") is False:
@@ -523,20 +576,18 @@ async def _准备本地文件(参数: dict[str, Any]) -> Path:
         if 路径 is not None and await asyncio.to_thread(路径.is_file):
             本地 = 参数["local"] = {"path": str(路径), "owned": True}
     if isinstance(本地, dict):
-        if 本地.get("too_large") is True:
-            raise 图床归档错误("source_too_large")
         原路径 = Path(本地["path"]) if 本地.get("path") else None
         if 原路径 is not None:
             大小 = (await asyncio.to_thread(原路径.stat)).st_size
-            if not 0 < 大小 <= 最大文件字节数:
-                raise 图床归档错误("source_too_large")
+            if 大小 <= 0:
+                raise 图床归档错误("source_data_invalid")
             安全路径 = _安全缓存路径(原路径)
             if 本地.get("owned") is True and 安全路径 is not None and 本地.get("complete", True):
                 文件缓存.标记临时缓存正在使用(安全路径)
                 return await _接管缓存文件(参数, 安全路径)
         else:
             数据 = 本地.get("data")
-            if not isinstance(数据, (bytes, bytearray, memoryview)) or not 0 < len(数据) <= 最大文件字节数:
+            if not isinstance(数据, (bytes, bytearray, memoryview)) or not 数据:
                 raise 图床归档错误("source_data_invalid")
         新路径 = 文件缓存.创建临时缓存文件("mantou-imgbed-media-", ".bin")
         文件缓存.标记临时缓存正在使用(新路径)
@@ -580,6 +631,14 @@ async def _执行归档(参数: dict[str, Any]) -> None:
     if isinstance(已存, dict):
         参数["archive"] = 已存
     归档 = 参数.get("archive")
+    已解除大小拒绝 = _解除旧大小拒绝(参数)
+    if _旧大小拒绝可恢复(参数.get("pending_state")) and not 已解除大小拒绝 and isinstance(归档, dict):
+        # 较新的已提交/已确认状态优先于旧大小失败回填，不回退其进度。
+        参数.pop("pending_state", None)
+        if 参数.get("terminal") and not 参数.get("confirmed_result"):
+            if 归档.get("status") in {"stored", "saved"} and _图床地址(归档.get("url")):
+                参数["done"] = True
+            return
     if isinstance(参数.get("pending_state"), dict):
         await _保存状态(参数, 参数["pending_state"])
         参数.pop("pending_state", None)
@@ -595,7 +654,10 @@ async def _执行归档(参数: dict[str, Any]) -> None:
     if _提交未知(归档) and not 参数.get("confirmed_result"):
         参数["terminal"] = True
         return
-    if (isinstance(归档, dict) and 归档.get("error_stage") in {"source_expired", "source_too_large"}
+    if _旧大小拒绝仍需保护(归档) and not 参数.get("confirmed_result"):
+        参数["terminal"] = True
+        return
+    if (isinstance(归档, dict) and 归档.get("error_stage") == "source_expired"
             and 归档.get("source_fingerprint") == hashlib.sha256(_源地址(参数["item"]).encode()).hexdigest()
             and not 参数.get("confirmed_result") and not 参数.get("local")):
         参数["terminal"] = True
@@ -681,7 +743,7 @@ async def _处理任务(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
             参数["terminal"] = True
         elif 阶段 == "source_waiting":
             参数["terminal"] = True
-        elif 阶段 in {"source_expired", "source_too_large", "source_url_invalid", "source_host_not_public", "source_tls_error"}:
+        elif 阶段 in {"source_expired", "source_url_invalid", "source_host_not_public", "source_tls_error"}:
             参数["terminal"] = True
         elif str(阶段).startswith("source_"):
             参数["source_failures"] = int(参数.get("source_failures", 0)) + 1
@@ -726,6 +788,7 @@ async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
                 if isinstance(已有, dict):
                     参数["archive"] = 已有
                 归档 = 参数.get("archive")
+                _解除旧大小拒绝(参数)
                 已完成 = _已完成进度结果(归档.get("progress")) if isinstance(归档, dict) else None
                 if 已完成:
                     参数["confirmed_result"] = 已完成
@@ -758,13 +821,18 @@ async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
                     参数["terminal"] = True
                     参数["registered"] = True
                     return
-                if (isinstance(归档, dict) and 归档.get("error_stage") in {"source_expired", "source_too_large"}
+                if _旧大小拒绝仍需保护(归档):
+                    参数["terminal"] = True
+                    参数["registered"] = True
+                    return
+                if (isinstance(归档, dict) and 归档.get("error_stage") == "source_expired"
                         and 归档.get("source_fingerprint") == hashlib.sha256(_源地址(参数["item"]).encode()).hexdigest()
                         and not 参数.get("confirmed_result") and not (参数.get("local") or {}).get("complete")):
                     参数["terminal"] = True
                     参数["registered"] = True
                     return
                 字段 = {}
+                _本地来源去旧大小标记(参数)
                 if isinstance(参数.get("local"), dict) and 参数["local"].get("complete", True):
                     路径 = await _准备本地文件(参数)
                     字段.update(local_path=str(路径), local_complete=True)
@@ -780,15 +848,6 @@ async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
             return
         参数["retry_at"] = asyncio.get_running_loop().time() + 30.0
         阶段 = getattr(异常, "stage", "state_unavailable")
-        if 阶段 == "source_too_large":
-            参数["terminal"] = True
-            参数["registered"] = True
-            参数["pending_state"] = _新状态(参数, "failed", error_stage="source_too_large")
-            try:
-                await _保存状态(参数, 参数["pending_state"])
-                参数.pop("pending_state", None)
-            except 图床归档错误:
-                pass
         if 参数.get("last_error") != 阶段:
             logger.warning("自建图床待保存登记失败：阶段=%s，媒体序号=%s，错误类型=%s", 阶段, 参数["index"], type(异常).__name__)
             参数["last_error"] = 阶段
@@ -847,6 +906,7 @@ def 启动媒体归档任务(配置: Any) -> None:
     _停止中 = False
     _接收开启 = True
     for 参数 in _待归档.values():
+        _解除旧大小拒绝(参数)
         if 参数.get("last_error") in {"not_configured", "state_unavailable", "state_conflict", "message_waiting"} and not _提交未知(参数.get("archive")):
             参数.pop("terminal", None)
         参数["retry_at"] = 0.0

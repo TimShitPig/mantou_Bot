@@ -51,8 +51,6 @@ except Exception:
     "list_collapsed": False,
     "composer_collapsed": False,
 }
-媒体代理最大字节数 = 5 * 1024 * 1024 * 1024
-消息媒体上传最大字节数 = 256 * 1024 * 1024
 媒体代理超时秒 = 30
 媒体代理连接超时秒 = 10
 媒体代理读取超时秒 = 60
@@ -196,6 +194,9 @@ async def 机器人作用域中间件(request: web.Request, handler: Any) -> web
     from 功能文件.管理功能.基础功能 import 消息记录
     if appid not in 消息记录.获取已配置机器人AppID列表():
         return _控制台错误(409, "机器人配置已变更，请重新选择")
+    if 路径 == "/api/message/send" and request.content_type.startswith("multipart/"):
+        # 仅文件流不设总量上限；JSON 等结构化消息保留应用的读取预算。
+        request = request.clone(client_max_size=0)
     if request.content_type == "application/json" and request.can_read_body:
         try:
             数据 = await request.json()
@@ -1413,6 +1414,7 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
         return await _读取请求JSON(request), None
     数据: dict[str, Any] = {}
     临时路径: Path | None = None
+    文本字节数 = 0
     try:
         读取器 = await request.multipart()
         async for 部分 in 读取器:
@@ -1429,16 +1431,12 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
                 from 功能文件.管理功能.基础功能 import 文件缓存
 
                 临时路径 = 文件缓存.创建临时缓存文件("mantou-web-", 后缀)
-                已读 = 0
                 try:
                     with 临时路径.open('wb') as 文件句柄:
                         while True:
                             数据块 = await 部分.read_chunk(size=1024 * 1024)
                             if not 数据块:
                                 break
-                            已读 += len(数据块)
-                            if 已读 > (10 * 1024 * 1024 if 名称 == 'image_file' else 消息媒体上传最大字节数):
-                                raise ValueError('媒体文件过大')
                             文件句柄.write(数据块)
                 except (Exception, asyncio.CancelledError):
                     临时路径.unlink(missing_ok=True)
@@ -1451,7 +1449,13 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
                     数据['media'] = str(临时路径)
                     数据['media_name'] = 文件名[:160]
                 continue
-            数据[名称] = await 部分.text()
+            文本 = bytearray()
+            while 数据块 := await 部分.read_chunk(size=64 * 1024):
+                文本字节数 += len(数据块)
+                if 文本字节数 > 64 * 1024:
+                    raise ValueError('消息文字参数过长')
+                文本.extend(数据块)
+            数据[名称] = 文本.decode(部分.get_charset(default='utf-8'))
         for 名称 in ('card', 'ark_fields'):
             值 = 数据.get(名称)
             if isinstance(值, str) and 值.strip().startswith(('{', '[')):
@@ -1655,11 +1659,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
             raise ValueError("range_invalid")
     except ValueError:
         return web.Response(status=416, text="媒体范围无效")
-    if 范围 is not None:
-        首, 尾 = 范围
-        请求长度 = 尾 if 首 is None else (尾 - 首 + 1 if 尾 is not None else 0)
-        if 请求长度 > 媒体代理最大字节数:
-            return web.Response(status=413, text="媒体文件过大")
     缓存键 = _媒体代理缓存键(地址)
     if _媒体代理失败缓存命中(缓存键):
         return _媒体代理失败响应(模式, 已过期=True)
@@ -1693,8 +1692,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     响应头 = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
                     无效范围 = re.fullmatch(r"bytes \*/(\d+)", 上游.headers.get("Content-Range", ""))
                     if 无效范围:
-                        if int(无效范围.group(1)) > 媒体代理最大字节数:
-                            return web.Response(status=413, text="媒体文件过大")
                         响应头["Content-Range"] = 无效范围.group(0)
                     return web.Response(status=416, headers=响应头)
                 预期范围长度 = None
@@ -1704,8 +1701,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     if not 匹配:
                         return _媒体代理失败响应(模式)
                     首字节, 尾字节, 总量 = map(int, 匹配.groups())
-                    if 总量 > 媒体代理最大字节数 or 尾字节 - 首字节 + 1 > 媒体代理最大字节数:
-                        return web.Response(status=413, text="媒体文件过大")
                     if not 0 <= 首字节 <= 尾字节 < 总量:
                         return _媒体代理失败响应(模式)
                     if 范围 is not None:
@@ -1732,8 +1727,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     if 上游.headers.get("Content-Length") is not None and 内容长度 != 预期范围长度:
                         return _媒体代理失败响应(模式)
                     内容长度 = 预期范围长度
-                if 内容长度 > 媒体代理最大字节数:
-                    return web.Response(status=413, text="媒体文件过大")
 
                 阶段 = "read_prefix"
                 前缀 = await 上游.content.read(64 * 1024)
@@ -1768,11 +1761,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 阶段 = "prepare_response"
                 await 响应.prepare(request)
                 if 前缀:
-                    if len(前缀) > 媒体代理最大字节数:
-                        阶段 = "response_eof"
-                        await 响应.write_eof()
-                        阶段 = "upstream_release"
-                        return 响应
                     阶段 = "response_write"
                     await 响应.write(前缀)
                     已发送 += len(前缀)
@@ -1780,13 +1768,6 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                 async for 数据块 in 上游.content.iter_chunked(64 * 1024):
                     if 预期范围长度 is not None and 已发送 + len(数据块) > 预期范围长度:
                         raise ValueError("media_range_length_mismatch")
-                    if 已发送 + len(数据块) > 媒体代理最大字节数:
-                        logger.warning(
-                            "帮助控制台媒体代理达到大小上限：模式=%s，大小上限=%d",
-                            模式,
-                            媒体代理最大字节数,
-                        )
-                        raise ValueError("media_size_limit")
                     阶段 = "response_write"
                     await 响应.write(数据块)
                     已发送 += len(数据块)

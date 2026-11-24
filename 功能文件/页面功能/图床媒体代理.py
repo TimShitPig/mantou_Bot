@@ -11,7 +11,6 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, w
 
 
 _单次范围 = 4 * 1024 * 1024
-_读取上限 = 800 * 1024 * 1024
 _下载额度 = globals().get("_下载额度")
 if _下载额度 is None:
     _下载额度 = weakref.WeakKeyDictionary()
@@ -56,8 +55,8 @@ def _范围(头: str, 大小: int) -> tuple[int, int, bool]:
     return 起点, 终点, True
 
 
-async def _探测大小(客户端, 地址: str) -> tuple[int, str]:
-    """HEAD 无长度时只读一字节范围；忽略范围的小文件有界读取至 EOF。"""
+async def _探测大小(客户端, 地址: str) -> tuple[int | None, str]:
+    """HEAD 无长度时只探测一字节范围，不为获得大小全量读取正文。"""
     async with 客户端.get(
         地址, headers={"Range": "bytes=0-0", "Accept-Encoding": "identity"}, allow_redirects=False,
     ) as 上游:
@@ -66,7 +65,7 @@ async def _探测大小(客户端, 地址: str) -> tuple[int, str]:
         类型 = str(上游.headers.get("Content-Type") or "application/octet-stream")
         长度头 = 上游.headers.get("Content-Length")
         if 上游.status == 206:
-            匹配 = re.fullmatch(r"bytes 0-0/([1-9][0-9]{0,11})", 上游.headers.get("Content-Range", ""))
+            匹配 = re.fullmatch(r"bytes 0-0/([1-9][0-9]*)", 上游.headers.get("Content-Range", ""))
             if not 匹配 or (长度头 is not None and 长度头 != "1"):
                 raise ValueError("upstream_range")
             if len(await 上游.content.read(2)) != 1 or await 上游.content.read(1):
@@ -74,19 +73,11 @@ async def _探测大小(客户端, 地址: str) -> tuple[int, str]:
             return int(匹配[1]), 类型
         if 上游.status != 200:
             raise ValueError("upstream_status")
-        小文件上限 = 16 * 1024 * 1024
         if 长度头 is not None:
-            if not re.fullmatch(r"[0-9]+", 长度头) or not 0 < int(长度头) <= 小文件上限:
+            if not re.fullmatch(r"[0-9]+", 长度头) or int(长度头) <= 0:
                 raise ValueError("upstream_length")
             return int(长度头), 类型
-        大小 = 0
-        while True:
-            数据 = await 上游.content.read(min(64 * 1024, 小文件上限 - 大小 + 1))
-            if not 数据:
-                return 大小, 类型
-            大小 += len(数据)
-            if 大小 > 小文件上限:
-                raise ValueError("upstream_size")
+        return None, 类型
 
 
 async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文件名: str) -> web.StreamResponse:
@@ -118,22 +109,52 @@ async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文
                 大小, 探测类型 = await _探测大小(客户端, 地址)
                 原内容类型 = 原内容类型 or 探测类型
             内容类型 = str(原内容类型 or "application/octet-stream").split(";", 1)[0].lower()
-            if not 0 < 大小 <= _读取上限:
-                return web.Response(status=413 if 大小 > _读取上限 else 502, text="媒体文件不可用")
+            if 大小 is not None and 大小 <= 0:
+                return web.Response(status=502, text="媒体文件不可用")
             if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", 内容类型):
                 内容类型 = "application/octet-stream"
             if 模式 in {"image", "avatar"} and not 内容类型.startswith("image/"):
                 return web.Response(status=415, text="不是可预览的图片")
-            try:
-                起点, 终点, 分段 = _范围(头列表[0] if 头列表 else "", 大小)
-            except ValueError:
-                return web.Response(status=416, headers={"Content-Range": f"bytes */{大小}"})
             响应头 = {
-                "Content-Type": 内容类型, "Content-Length": str(终点 - 起点 + 1), "Accept-Ranges": "bytes",
+                "Content-Type": 内容类型, "Accept-Ranges": "bytes",
                 "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400",
                 "Content-Security-Policy": "sandbox; default-src 'none'",
                 "Content-Disposition": "inline" if 模式 in {"image", "avatar"} else "attachment; filename*=UTF-8''" + quote(文件名, safe=""),
             }
+            if 大小 is None:
+                响应头["Accept-Ranges"] = "none"
+                if 头列表:
+                    return web.Response(status=502, text="暂时无法获取媒体长度", headers={"Cache-Control": "no-store"})
+                if request.method == "HEAD":
+                    return web.Response(status=200, headers=响应头)
+                # 无法探测长度时直接流式读取一次，不缓存整份文件或提前声明长度。
+                async with 客户端.get(
+                    地址, headers={"Range": f"bytes=0-{_单次范围 - 1}", "Accept-Encoding": "identity"}, allow_redirects=False,
+                ) as 上游:
+                    if 上游.status != 200 or 上游.headers.get("Content-Encoding", "identity").lower() != "identity":
+                        raise ValueError("upstream_status")
+                    长度头 = 上游.headers.get("Content-Length")
+                    if 长度头 is not None and (not re.fullmatch(r"[0-9]+", 长度头) or int(长度头) <= 0):
+                        raise ValueError("upstream_length")
+                    预期大小 = int(长度头) if 长度头 is not None else None
+                    已读 = 0
+                    while 数据 := await 上游.content.read(64 * 1024):
+                        已读 += len(数据)
+                        if 预期大小 is not None and 已读 > 预期大小:
+                            raise ValueError("upstream_length")
+                        if 响应 is None:
+                            响应 = web.StreamResponse(status=200, headers=响应头)
+                            await 响应.prepare(request)
+                        await 响应.write(数据)
+                    if 响应 is None or 预期大小 is not None and 已读 != 预期大小:
+                        raise ValueError("upstream_short")
+                await 响应.write_eof()
+                return 响应
+            try:
+                起点, 终点, 分段 = _范围(头列表[0] if 头列表 else "", 大小)
+            except ValueError:
+                return web.Response(status=416, headers={"Content-Range": f"bytes */{大小}"})
+            响应头["Content-Length"] = str(终点 - 起点 + 1)
             if 分段:
                 响应头["Content-Range"] = f"bytes {起点}-{终点}/{大小}"
             if request.method == "HEAD":
@@ -150,9 +171,10 @@ async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文
                         if 上游.headers.get("Content-Range") != f"bytes {位置}-{本段终点}/{大小}":
                             raise ValueError("upstream_range")
                         跳过 = 0
-                    elif 上游.status == 200 and 大小 <= 16 * 1024 * 1024:
-                        # 小文件源忽略 Range 时有界跳过原文件前缀；大文件必须逐段读取。
+                    elif 上游.status == 200:
+                        # 忽略范围的源只读取当前响应，避免每一段重新下载全部前缀。
                         跳过 = 位置
+                        本段终点 = 终点
                     else:
                         raise ValueError("upstream_status")
                     上游长度 = 上游.headers.get("Content-Length")
@@ -175,7 +197,7 @@ async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文
                             await 响应.prepare(request)
                         await 响应.write(数据)
                         剩余 -= len(数据)
-                    if 上游.status == 206 and await 上游.content.read(1):
+                    if (上游.status == 206 or 本段终点 == 大小 - 1) and await 上游.content.read(1):
                         raise ValueError("upstream_length")
                 位置 = 本段终点 + 1
             await 响应.write_eof()
