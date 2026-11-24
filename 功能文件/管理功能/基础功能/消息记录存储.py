@@ -2033,6 +2033,69 @@ def 读取引用定位窗口(
         _关闭连接(连接)
 
 
+_图床存储错误分类 = frozenset({
+    "configuration", "dependency", "dns", "timeout", "network", "tls", "tls_required",
+    "tls_unavailable", "authentication", "host_denied", "permission", "database_missing",
+    "auth_plugin", "server_busy", "schema", "invalid_data", "unavailable", "unknown",
+})
+
+
+class 图床状态存储错误(RuntimeError):
+    """只传递固定分类及数字码，不保留数据库异常原文或连接参数。"""
+    def __init__(self, operation: str, stage: str, category: str = "unknown",
+                 mysql_code: int | None = None, source_error_type: str = "RuntimeError"):
+        self.operation = operation if operation in {"read", "update", "restore"} else "read"
+        self.stage = stage if stage in {"config", "connect", "query", "decode"} else "query"
+        self.category = category if category in _图床存储错误分类 else "unknown"
+        self.mysql_code = mysql_code if type(mysql_code) is int else None
+        self.source_error_type = (
+            source_error_type if isinstance(source_error_type, str)
+            and len(source_error_type) <= 64 and source_error_type.isidentifier() else "Error"
+        )
+        super().__init__("imgbed_archive_unavailable")
+
+
+def _图床存储错误(operation: str, stage: str, error: Exception) -> 图床状态存储错误:
+    if isinstance(error, 图床状态存储错误):
+        return error
+    错误码 = None
+    for 值 in (getattr(error, "mysql_code", None), getattr(error, "errno", None),
+               error.args[0] if error.args else None):
+        if type(值) is int:
+            错误码 = 值
+            break
+    分类 = "unknown"
+    try:
+        from 功能文件.管理功能.基础功能 import 运行状态数据库
+
+        分类, 关联码 = 运行状态数据库._分类数据库连接异常(error)
+        if 错误码 is None and type(关联码) is int:
+            错误码 = 关联码
+    except Exception:
+        pass
+    if 错误码 in {1054, 1064, 1146, 1253, 1273, 1305}:
+        分类 = "schema"
+    elif 错误码 in {1264, 1292, 1366, 1406, 3140, 3141}:
+        分类 = "invalid_data"
+    elif isinstance(error, (TypeError, ValueError, UnicodeError, RecursionError, OverflowError)):
+        分类 = "invalid_data"
+    return 图床状态存储错误(operation, stage, 分类, 错误码, type(error).__name__)
+
+
+def _打开图床状态连接() -> Any:
+    """图床必须区分连接故障，不能把真实错误码吞成无连接。"""
+    原有覆盖 = hasattr(_数据库线程配置, "严格读取")
+    原有值 = getattr(_数据库线程配置, "严格读取", False)
+    _数据库线程配置.严格读取 = True
+    try:
+        return _打开连接()
+    finally:
+        if 原有覆盖:
+            _数据库线程配置.严格读取 = 原有值
+        else:
+            del _数据库线程配置.严格读取
+
+
 def _图床归档查询条件(
     会话标识: str, 消息ID: str, 类型: str, 媒体索引: int,
     appid: str, history_origin: str, history_order: int,
@@ -2045,16 +2108,25 @@ def _图床归档查询条件(
     ):
         raise ValueError("invalid_imgbed_archive_scope")
     编号 = _完整写入消息ID(消息ID)
-    条件 = "BINARY 会话标识=BINARY %s AND BINARY 消息类型=BINARY %s AND BINARY appid=BINARY %s"
+    字段 = ["会话标识", "消息类型", "appid"]
     参数: tuple[Any, ...] = (会话标识.strip(), 类型, appid)
     if 编号:
-        return 条件 + " AND BINARY message_id=BINARY %s", (*参数, 编号)
-    if (
-        not isinstance(history_origin, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", history_origin)
-        or not isinstance(history_order, int) or isinstance(history_order, bool) or history_order <= 0
-    ):
-        raise ValueError("invalid_imgbed_archive_history")
-    return 条件 + " AND BINARY history_origin=BINARY %s AND history_order=%s", (*参数, history_origin, history_order)
+        字段.append("message_id")
+        参数 = (*参数, 编号)
+        后缀, 后缀参数 = "", ()
+    else:
+        if (
+            not isinstance(history_origin, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", history_origin)
+            or not isinstance(history_order, int) or isinstance(history_order, bool) or history_order <= 0
+        ):
+            raise ValueError("invalid_imgbed_archive_history")
+        字段.append("history_origin")
+        参数 = (*参数, history_origin)
+        后缀, 后缀参数 = " AND history_order=%s", (history_order,)
+    # 普通等值保留复合索引入口，再按原字节核对，兼容不区分大小写的库排序规则。
+    条件 = " AND ".join(f"{列}=%s" for 列 in 字段) + 后缀
+    精确条件 = " AND ".join(f"BINARY {列}=BINARY %s" for 列 in 字段)
+    return 条件 + " AND " + 精确条件, (*参数, *后缀参数, *参数)
 
 
 def _图床归档JSON(归档: Any) -> str:
@@ -2117,25 +2189,33 @@ def 读取消息图床归档(
 ) -> dict[str, Any] | None:
     """读取现有消息原索引的图床状态；读取故障不能冒充尚未上传。"""
     连接 = None
+    阶段 = "config"
+    错误 = None
     try:
         条件, 参数 = _图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
-        if not _MySQL可用() or (连接 := _打开连接()) is None:
-            raise RuntimeError("imgbed_archive_unavailable")
+        if not _MySQL可用():
+            raise 图床状态存储错误("read", 阶段, "configuration")
+        阶段 = "connect"
+        if (连接 := _打开图床状态连接()) is None:
+            raise 图床状态存储错误("read", 阶段, "unavailable")
+        阶段 = "query"
         with 连接.cursor() as 游标:
             游标.execute(f"SELECT media FROM `{消息记录表名}` WHERE {条件} LIMIT 2", 参数)
             行列表 = 游标.fetchall()
         if not 行列表:
             return None
         if len(行列表) != 1:
-            raise RuntimeError("imgbed_archive_ambiguous")
+            raise 图床状态存储错误("read", "decode", "invalid_data")
+        阶段 = "decode"
         _, _, 归档列表 = _图床归档媒体(_行字段(行列表[0], 0, "media", 默认值="{}"), 媒体索引)
         if str(媒体索引) not in 归档列表:
             return None
         return json.loads(_图床归档JSON(归档列表[str(媒体索引)]))
-    except Exception:
-        raise RuntimeError("imgbed_archive_unavailable") from None
+    except Exception as exc:
+        错误 = _图床存储错误("read", 阶段, exc)
     finally:
         _关闭连接(连接)
+    raise 错误 from None
 
 
 def 更新消息图床归档(
@@ -2161,12 +2241,18 @@ def 更新消息图床归档(
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return "conflict"
     连接 = None
+    阶段 = "config"
+    错误 = None
     try:
         with _历史清理写锁:
             if isinstance(原记录, dict) and _记录已被清理(原记录):
                 return "missing"
-            if not _MySQL可用() or (连接 := _打开连接()) is None:
-                return "unavailable"
+            if not _MySQL可用():
+                raise 图床状态存储错误("update", 阶段, "configuration")
+            阶段 = "connect"
+            if (连接 := _打开图床状态连接()) is None:
+                raise 图床状态存储错误("update", 阶段, "unavailable")
+            阶段 = "query"
             with 连接.cursor() as 游标:
                 游标.execute(
                     f"SELECT id, media, history_origin, history_order FROM `{消息记录表名}` "
@@ -2184,6 +2270,7 @@ def 更新消息图床归档(
                 if _记录已被清理(清理记录):
                     连接.rollback()
                     return "missing"
+                阶段 = "decode"
                 try:
                     媒体, 项目, 归档列表 = _图床归档媒体(_行字段(行, 1, "media", 默认值="{}"), 媒体索引)
                     当前归档 = 归档列表.get(str(媒体索引))
@@ -2205,6 +2292,7 @@ def 更新消息图床归档(
                     return "conflict"
                 归档列表[str(媒体索引)] = json.loads(新编码)
                 媒体["_imgbed_archives"] = 归档列表
+                阶段 = "query"
                 游标.execute(f"UPDATE `{消息记录表名}` SET media=%s WHERE id=%s",
                         (json.dumps(媒体, ensure_ascii=False, allow_nan=False), 清理记录["_history_db_id"]))
             连接.commit()
@@ -2215,15 +2303,50 @@ def 更新消息图床归档(
                 连接.rollback()
             except Exception:
                 pass
-        logger.debug("消息记录图床归档保存失败：错误类型=%s", type(exc).__name__)
-        return "unavailable"
+        错误 = _图床存储错误("update", 阶段, exc)
     finally:
         _关闭连接(连接)
+    raise 错误 from None
+
+
+_图床恢复字段 = (
+    "id", "会话标识", "消息类型", "appid", "message_id", "timestamp", "ts", "is_self",
+    "source", "media", "history_origin", "history_order",
+)
+
+
+def _图床恢复行(行: Any, 编号: int) -> dict[str, Any] | None:
+    值 = {字段: _行字段(行, 索引, 字段, 默认值=None) for 索引, 字段 in enumerate(_图床恢复字段)}
+    原媒体 = 值["media"]
+    媒体 = json.loads(原媒体) if isinstance(原媒体, (str, bytes, bytearray)) else 原媒体
+    if not isinstance(媒体, dict) or not isinstance(媒体.get("_imgbed_archives"), dict):
+        return None
+    会话 = str(值["会话标识"] or "").strip()
+    类型 = str(值["消息类型"] or "")
+    appid = str(值["appid"] or "")
+    if not 会话 or len(会话) > 128 or 类型 not in {"group", "user"} or not re.fullmatch(r"[0-9]{4,32}", appid):
+        return None
+
+    def 整数(内容: Any) -> int:
+        try:
+            return int(内容 or 0) if not isinstance(内容, bool) else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    return {
+        "id": 编号, "_history_db_id": 编号, "_session": 会话, "chat_type": 类型, "appid": appid,
+        "message_id": _规范消息ID(值["message_id"]), "timestamp": str(值["timestamp"] or ""),
+        "ts": 整数(值["ts"]), "is_self": str(值["is_self"] or "0") in {"1", "true", "True"},
+        "source": str(值["source"] or ""), "media": 媒体,
+        "history_origin": str(值["history_origin"] or ""), "history_order": 整数(值["history_order"]),
+    }
 
 
 def 列出待处理图床消息(*, after_id: int = 0, limit: int = 200) -> dict[str, Any]:
-    """按主键分页现有图床状态，具体恢复资格由归档器判断。"""
+    """先按主键扫描有界原始页，再筛图床状态；空匹配页也必须推进扫描游标。"""
     连接 = None
+    阶段 = "config"
+    错误 = None
     try:
         if (
             not isinstance(after_id, int) or isinstance(after_id, bool) or after_id < 0
@@ -2231,24 +2354,39 @@ def 列出待处理图床消息(*, after_id: int = 0, limit: int = 200) -> dict[
         ):
             raise ValueError("invalid_imgbed_archive_cursor")
         上限 = min(limit, 200)
-        if not _MySQL可用() or (连接 := _打开连接()) is None:
-            raise RuntimeError("imgbed_archive_unavailable")
+        if not _MySQL可用():
+            raise 图床状态存储错误("restore", 阶段, "configuration")
+        阶段 = "connect"
+        if (连接 := _打开图床状态连接()) is None:
+            raise 图床状态存储错误("restore", 阶段, "unavailable")
+        阶段 = "query"
         with 连接.cursor() as 游标:
             游标.execute(
-                f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE id>%s "
-                "AND JSON_VALID(media) AND JSON_TYPE(JSON_EXTRACT("
-                f"{_已有媒体SQL}, '$._imgbed_archives'))='OBJECT' "
+                f"SELECT {', '.join(_图床恢复字段)} FROM `{消息记录表名}` WHERE id>%s "
                 "ORDER BY id ASC LIMIT %s", (after_id, 上限 + 1),
             )
             行列表 = 游标.fetchall()
-        记录列表 = [_行转记录(行) for 行 in 行列表[:上限]]
-        return {"records": 记录列表,
-                "next_id": 记录列表[-1]["_history_db_id"] if 记录列表 else after_id,
-                "has_more": len(行列表) > 上限}
-    except Exception:
-        raise RuntimeError("imgbed_archive_unavailable") from None
+        阶段 = "decode"
+        记录列表 = []
+        扫描游标 = after_id
+        for 行 in 行列表[:上限]:
+            编号 = _行字段(行, 0, "id", 默认值=0)
+            if type(编号) is not int or 编号 <= 扫描游标:
+                raise 图床状态存储错误("restore", 阶段, "invalid_data")
+            扫描游标 = 编号
+            try:
+                记录 = _图床恢复行(行, 编号)
+            except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+                # 损坏媒体不能阻断后面的状态；主键仍按实际扫描行前进。
+                continue
+            if 记录 is not None:
+                记录列表.append(记录)
+        return {"records": 记录列表, "next_id": 扫描游标, "has_more": len(行列表) > 上限}
+    except Exception as exc:
+        错误 = _图床存储错误("restore", 阶段, exc)
     finally:
         _关闭连接(连接)
+    raise 错误 from None
 
 
 def 批量写入消息(记录列表: list[dict[str, Any]]) -> bool:

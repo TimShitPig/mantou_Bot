@@ -4,6 +4,7 @@ import asyncio
 import ast
 import base64
 import copy
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import partial
@@ -117,6 +118,8 @@ _元数据写入锁 = globals().get("_元数据写入锁") or threading.RLock()
 _后台写入任务: set[asyncio.Task[Any]] = globals().get("_后台写入任务") or set()
 _消息记录执行器: ThreadPoolExecutor | None = globals().get("_消息记录执行器")
 _消息记录执行器锁 = threading.Lock()
+_图床数据库执行器: ThreadPoolExecutor | None = globals().get("_图床数据库执行器")
+_图床数据库执行器锁 = globals().get("_图床数据库执行器锁") or threading.Lock()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
 _消息持久化项目类型 = ("message", "user_profile", "member_link", "unread", "friend_state", "group_member_state")
@@ -1422,6 +1425,15 @@ def _获取消息记录执行器() -> ThreadPoolExecutor:
         return _消息记录执行器
 
 
+def _获取图床数据库执行器() -> ThreadPoolExecutor:
+    """图床状态单独排队，不占用默认 DNS 线程或普通消息 INSERT 线程。"""
+    global _图床数据库执行器
+    with _图床数据库执行器锁:
+        if _图床数据库执行器 is None or getattr(_图床数据库执行器, "_shutdown", False):
+            _图床数据库执行器 = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mantou-imgbed-db")
+        return _图床数据库执行器
+
+
 async def _异步执行消息记录同步(操作: Any, *参数: Any) -> Any:
     """在线程池执行可能阻塞的消息记录数据库操作。"""
     loop = asyncio.get_running_loop()
@@ -1436,12 +1448,17 @@ async def _异步执行消息记录同步(操作: Any, *参数: Any) -> Any:
 
 def 关闭消息记录执行器() -> None:
     """停止消息记录专用线程池，供插件重载时释放资源。"""
-    global _消息记录执行器
+    global _消息记录执行器, _图床数据库执行器
     with _消息记录执行器锁:
         执行器 = _消息记录执行器
         _消息记录执行器 = None
     if 执行器 is not None:
         执行器.shutdown(wait=False, cancel_futures=True)
+    with _图床数据库执行器锁:
+        图床执行器 = _图床数据库执行器
+        _图床数据库执行器 = None
+    if 图床执行器 is not None:
+        图床执行器.shutdown(wait=False, cancel_futures=True)
 
 
 def _消息数据库已配置() -> bool:
@@ -4988,16 +5005,60 @@ def _图床热点记录(
     return None
 
 
+def _图床数据库就绪错误(分类: str, 来源类型: str = "RuntimeError") -> RuntimeError:
+    错误 = RuntimeError("imgbed_archive_unavailable")
+    错误.operation = "readiness"
+    错误.category = 分类
+    错误.mysql_code = None
+    错误.source_error_type = 来源类型
+    错误.stage = "state_unavailable"
+    return 错误
+
+
+async def _等待图床数据库就绪(数据库键: str) -> None:
+    """只等待已绑定库的消息初始化；换库或初始化失败时保留待处理项目。"""
+    if _消息存储 is None or not 数据库键:
+        raise _图床数据库就绪错误("initialization_pending")
+    if _消息存储.获取数据库初始化键(当前插件配置) != 数据库键:
+        raise _图床数据库就绪错误("database_changed")
+    if 数据库键 == _消息数据库恢复完成键:
+        return
+    任务 = _消息数据库恢复任务 if 数据库键 == _消息数据库恢复键 else None
+    if 任务 is None or 任务.done():
+        任务 = _启动消息数据库恢复任务()
+    if 任务 is None or 数据库键 != _消息数据库恢复键:
+        raise _图床数据库就绪错误("initialization_pending")
+    try:
+        已完成 = await asyncio.shield(任务)
+    except asyncio.CancelledError:
+        当前任务 = asyncio.current_task()
+        if 任务.cancelled() and (当前任务 is None or not 当前任务.cancelling()):
+            raise _图床数据库就绪错误("initialization_failed", "CancelledError") from None
+        raise
+    except Exception as 异常:
+        raise _图床数据库就绪错误("initialization_failed", type(异常).__name__) from None
+    if _消息存储.获取数据库初始化键(当前插件配置) != 数据库键 or _消息数据库恢复键 != 数据库键:
+        raise _图床数据库就绪错误("database_changed")
+    if not 已完成 or _消息数据库恢复完成键 != 数据库键:
+        raise _图床数据库就绪错误("initialization_failed")
+
+
 async def _图床数据库操作(操作: Any, 参数: tuple[Any, ...], 关键字: dict[str, Any], 数据库快照: Any = None) -> tuple[Any, str]:
     if _消息存储 is None:
         raise RuntimeError("imgbed_archive_unavailable")
     快照 = 数据库快照 if 数据库快照 is not None else _消息存储.获取数据库配置快照(当前插件配置)
     数据库键 = _消息存储.获取数据库初始化键(快照)
+    await _等待图床数据库就绪(数据库键)
     调用 = partial(操作, *参数, **关键字)
-    任务 = asyncio.create_task(asyncio.to_thread(_消息存储.执行数据库配置快照操作, 快照, 调用))
+    上下文 = contextvars.copy_context()
+    线程任务 = _获取图床数据库执行器().submit(上下文.run, _消息存储.执行数据库配置快照操作, 快照, 调用)
+    任务 = asyncio.wrap_future(线程任务)
     try:
         return await asyncio.shield(任务), 数据库键
     except asyncio.CancelledError:
+        if 线程任务.cancel():
+            任务.cancel()
+            raise
         while not 任务.done():
             try:
                 await asyncio.shield(任务)
@@ -5052,7 +5113,7 @@ async def 更新消息图床归档(
         raise
     except Exception as exc:
         logger.debug("消息图床状态保存失败：错误类型=%s", type(exc).__name__)
-        return "unavailable"
+        raise
     if 结果 != "updated":
         return 结果 if 结果 in {"conflict", "missing", "unavailable"} else "unavailable"
     if 数据库键 != _消息存储.获取数据库初始化键(当前插件配置):

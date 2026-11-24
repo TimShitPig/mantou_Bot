@@ -49,12 +49,46 @@ if not isinstance(_登记任务, set):
 globals().pop("_登记额度", None)
 globals().pop("最大并发数", None)
 _恢复任务 = globals().get("_恢复任务")
+_存储操作白名单 = frozenset({"read", "update", "restore", "readiness"})
+_存储阶段白名单 = frozenset({"config", "connect", "query", "decode", "state_unavailable"})
+_存储分类白名单 = frozenset({
+    "configuration", "dependency", "dns", "timeout", "network", "tls", "tls_required",
+    "tls_unavailable", "authentication", "host_denied", "permission", "database_missing",
+    "auth_plugin", "server_busy", "unknown", "schema", "invalid_data", "unavailable",
+    "initialization_pending", "initialization_failed", "database_changed",
+})
+_存储错误类型白名单 = frozenset({
+    "RuntimeError", "ValueError", "TypeError", "OperationalError", "ProgrammingError",
+    "InterfaceError", "InternalError", "DataError", "IntegrityError", "TimeoutError",
+    "OSError", "ConnectionError", "DatabaseError", "Error", "UnicodeDecodeError",
+    "JSONDecodeError", "数据库连接错误",
+})
+
+
+def _存储错误字段(异常: BaseException, 操作: str = "") -> dict[str, Any]:
+    """只保留受控分类和数字码，不提取异常正文、SQL或连接配置。"""
+    原操作 = getattr(异常, "operation", 操作)
+    原阶段 = getattr(异常, "storage_stage", None) or getattr(异常, "stage", "")
+    分类 = getattr(异常, "category", "unknown")
+    错误码 = getattr(异常, "mysql_code", None)
+    根类型 = getattr(异常, "source_error_type", None) or type(异常).__name__
+    return {
+        "operation": 原操作 if type(原操作) is str and 原操作 in _存储操作白名单 else 操作 if 操作 in _存储操作白名单 else "",
+        "storage_stage": 原阶段 if type(原阶段) is str and 原阶段 in _存储阶段白名单 else "unknown",
+        "category": 分类 if type(分类) is str and 分类 in _存储分类白名单 else "unknown",
+        "mysql_code": 错误码 if type(错误码) is int and 0 < 错误码 < 100000 else None,
+        "source_error_type": 根类型 if type(根类型) is str and 根类型 in _存储错误类型白名单 else "Error",
+    }
 
 
 class 图床归档错误(RuntimeError):
-    def __init__(self, stage: str, status: int | None = None):
+    def __init__(self, stage: str, status: int | None = None, *, operation: str = "",
+                 storage_stage: str = "", category: str = "unknown", mysql_code: int | None = None,
+                 source_error_type: str = ""):
         super().__init__(stage)
         self.stage, self.status = stage, status
+        self.operation, self.storage_stage = operation, storage_stage
+        self.category, self.mysql_code, self.source_error_type = category, mysql_code, source_error_type
 
 
 class _公网解析器(aiohttp.abc.AbstractResolver):
@@ -383,8 +417,8 @@ async def _读取状态(参数: dict[str, Any]) -> dict[str, Any] | None:
         结果 = await 消息记录.读取消息图床归档(*_记录参数(参数), **_作用域参数(参数))
     except asyncio.CancelledError:
         raise
-    except Exception:
-        raise 图床归档错误("state_unavailable") from None
+    except Exception as 异常:
+        raise 图床归档错误("state_unavailable", **_存储错误字段(异常, "read")) from None
     return copy.deepcopy(结果) if isinstance(结果, dict) else None
 
 
@@ -398,8 +432,8 @@ async def _保存状态(参数: dict[str, Any], 新归档: dict[str, Any]) -> No
         )
     except asyncio.CancelledError:
         raise
-    except Exception:
-        raise 图床归档错误("state_unavailable") from None
+    except Exception as 异常:
+        raise 图床归档错误("state_unavailable", **_存储错误字段(异常, "update")) from None
     if 状态 == "updated":
         参数["archive"] = copy.deepcopy(新归档)
         参数["record"].setdefault("media", {}).setdefault("_imgbed_archives", {})[str(参数["index"])] = copy.deepcopy(新归档)
@@ -760,8 +794,13 @@ async def _处理任务(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
         if not 参数.get("terminal"):
             参数["retry_at"] = asyncio.get_running_loop().time() + 30.0
         if 参数.get("last_error") != 阶段:
-            logger.warning("自建图床媒体保存失败：阶段=%s，媒体序号=%s，HTTP状态=%s，错误类型=%s",
-                           阶段, 参数["index"], getattr(异常, "status", None) or "none", type(异常).__name__)
+            详情 = _存储错误字段(异常)
+            logger.warning(
+                "自建图床媒体保存失败：阶段=%s，数据库操作=%s，数据库阶段=%s，分类=%s，MySQL错误码=%s，根错误类型=%s，媒体序号=%s，HTTP状态=%s，错误类型=%s",
+                阶段, 详情["operation"] or "none", 详情["storage_stage"], 详情["category"],
+                详情["mysql_code"] if 详情["mysql_code"] is not None else "none", 详情["source_error_type"],
+                参数["index"], getattr(异常, "status", None) or "none", type(异常).__name__,
+            )
             参数["last_error"] = 阶段
     finally:
         if 参数.get("done") or 参数.get("gone"):
@@ -847,7 +886,13 @@ async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
         参数["retry_at"] = asyncio.get_running_loop().time() + 30.0
         阶段 = getattr(异常, "stage", "state_unavailable")
         if 参数.get("last_error") != 阶段:
-            logger.warning("自建图床待保存登记失败：阶段=%s，媒体序号=%s，错误类型=%s", 阶段, 参数["index"], type(异常).__name__)
+            详情 = _存储错误字段(异常)
+            logger.warning(
+                "自建图床待保存登记失败：阶段=%s，数据库操作=%s，数据库阶段=%s，分类=%s，MySQL错误码=%s，根错误类型=%s，媒体序号=%s，错误类型=%s",
+                阶段, 详情["operation"] or "none", 详情["storage_stage"], 详情["category"],
+                详情["mysql_code"] if 详情["mysql_code"] is not None else "none",
+                详情["source_error_type"], 参数["index"], type(异常).__name__,
+            )
             参数["last_error"] = 阶段
     finally:
         if 参数.get("done") or 参数.get("gone"):
@@ -949,7 +994,13 @@ async def _恢复待处理任务(配置: Any) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
-            logger.warning("自建图床任务恢复失败：阶段=state_restore，错误类型=%s", type(异常).__name__)
+            详情 = _存储错误字段(异常, "restore")
+            logger.warning(
+                "自建图床任务恢复失败：阶段=state_restore，数据库操作=%s，数据库阶段=%s，分类=%s，MySQL错误码=%s，根错误类型=%s，错误类型=%s",
+                详情["operation"], 详情["storage_stage"], 详情["category"],
+                详情["mysql_code"] if 详情["mysql_code"] is not None else "none",
+                详情["source_error_type"], type(异常).__name__,
+            )
             await asyncio.sleep(30)
 
 
