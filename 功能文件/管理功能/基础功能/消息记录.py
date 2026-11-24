@@ -63,6 +63,8 @@ from .QQ官方消息发送 import 主动消息权限被拒绝, 被动回复已�
 群信息人工最短间隔秒 = 60
 群信息轮询检查间隔秒 = 60.0
 群机器人状态命名空间 = "qq_group_membership"
+_群成员移除状态缓存: dict[tuple[str, str, str, str], dict[str, Any]] = globals().get("_群成员移除状态缓存") or {}
+_群消息撤回待同步: dict[tuple[str, str, str, str], float] = globals().get("_群消息撤回待同步") or {}
 群资源失效移除来源 = "resource_unavailable_11255_40011028"
 群非成员移除来源 = "bot_not_member_11293_40011026"
 # 各接口按 AppID 共用滚动60秒额度，换 Token 和同进程重载均不重置。
@@ -117,7 +119,7 @@ _消息记录执行器: ThreadPoolExecutor | None = globals().get("_消息记录
 _消息记录执行器锁 = threading.Lock()
 _未读待写: dict[str, int] = globals().get("_未读待写") or {}
 _消息持久化队列上限 = 50000
-_消息持久化项目类型 = ("message", "user_profile", "member_link", "unread", "friend_state")
+_消息持久化项目类型 = ("message", "user_profile", "member_link", "unread", "friend_state", "group_member_state")
 _消息持久化批量大小 = 200
 _消息持久化聚合秒数 = 0.05
 _消息持久化最大重试次数 = 3
@@ -1503,6 +1505,8 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
     群成员映射列表: list[dict[str, Any]] = []
     未读表: dict[str, int] = {}
     好友状态列表: list[dict[str, Any]] = []
+    成员状态列表: list[dict[str, Any]] = []
+    数据库键 = _消息存储.获取数据库初始化键(配置) if _消息存储 is not None else ""
     for 类型, 数据 in 项目列表:
         if 类型 == "message" and isinstance(数据, dict):
             # 升级前的排队副本属于当前进程的旧记录；新记录在创建时已有正序号。
@@ -1513,6 +1517,9 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
             撤回键 = (str(数据.get("_session") or ""), _规范消息ID(数据.get("message_id")))
             if 撤回键 in 已撤回消息待同步:
                 数据 = {**数据, "recalled": True}
+            群撤回键 = (数据库键, str(数据.get("appid") or ""), str(数据.get("_session") or ""), _规范消息ID(数据.get("message_id")))
+            if 数据.get("chat_type") == "group" and _群消息撤回标记有效(群撤回键):
+                数据 = {**数据, "recalled": True}
             消息列表.append(数据)
         elif 类型 == "user_profile" and isinstance(数据, dict):
             用户资料列表.append(数据)
@@ -1520,6 +1527,8 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
             群成员映射列表.append(数据)
         elif 类型 == "friend_state" and isinstance(数据, dict):
             好友状态列表.append(数据)
+        elif 类型 == "group_member_state" and isinstance(数据, dict):
+            成员状态列表.append(数据)
         elif 类型 == "unread" and isinstance(数据, tuple) and len(数据) == 2:
             会话标识, 未读数 = 数据
             未读表[str(会话标识)] = max(0, int(_未读待写.get(str(会话标识), 未读数) or 0))
@@ -1572,6 +1581,14 @@ def _执行消息持久化批次(项目列表: list[tuple[str, Any]], 配置: An
                 成功 = False
         except Exception as 异常:
             logger.debug("QQ好友关系批量持久化失败：错误类型=%s", type(异常).__name__)
+            成功 = False
+
+    for 状态项目 in 成员状态列表:
+        try:
+            if _写入群成员状态项目(状态项目) is None:
+                成功 = False
+        except Exception as 异常:
+            logger.debug("群成员移除状态持久化失败：错误类型=%s", type(异常).__name__)
             成功 = False
 
     if not 未读表:
@@ -2178,6 +2195,149 @@ def _提取QQ群消息作者角色(消息: Any) -> str:
     return ""
 
 
+def _群成员状态版本(时间: Any) -> int:
+    """保留真实时间的小数精度；缺失时间不能拿收到时间冒充新活动。"""
+    if isinstance(时间, bool) or 时间 is None or 时间 == "":
+        return 0
+    try:
+        if isinstance(时间, str) and len(时间) >= 10 and 时间[4] == "-":
+            日期 = _日期类.fromisoformat(时间.replace("Z", "+00:00"))
+            if 日期.tzinfo is None:
+                日期 = 日期.replace(tzinfo=_显示时区)
+            秒 = 日期.timestamp()
+        elif hasattr(时间, "timestamp"):
+            秒 = 时间.timestamp()
+        else:
+            秒 = float(时间)
+            if 秒 > 10**12:
+                秒 /= 1000
+        版本 = int(秒 * 1_000_000)
+        return 版本 if 0 < 版本 < 2**53 else 0
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _群成员状态上下文() -> tuple[Any, str]:
+    if _消息存储 is None:
+        return None, ""
+    快照 = _消息存储.获取数据库配置快照(当前插件配置)
+    return 快照, _消息存储.获取数据库初始化键(快照)
+
+
+def _群消息撤回标记有效(键: tuple[str, str, str, str]) -> bool:
+    时间 = _群消息撤回待同步.get(键)
+    if 时间 is None:
+        return False
+    if time.time() - 时间 < 600:
+        return True
+    _群消息撤回待同步.pop(键, None)
+    return False
+
+
+def _接受群成员移除状态(数据库键: str, 状态: Any) -> dict[str, Any]:
+    if not isinstance(状态, dict):
+        return {}
+    应用, 群, 成员 = (str(状态.get(字段) or "").strip() for 字段 in ("appid", "group_id", "member_id"))
+    版本 = 状态.get("member_state_version")
+    if (not re.fullmatch(r"[0-9]{4,32}", 应用) or not 群 or not 成员
+            or type(版本) is not int or not 0 < 版本 < 2**53 or type(状态.get("member_removed")) is not bool):
+        return {}
+    键 = 数据库键, 应用, 群, 成员
+    现有 = _群成员移除状态缓存.get(键) or {}
+    原版本 = int(现有.get("member_state_version") or 0)
+    if 版本 > 原版本 or (版本 == 原版本 and 状态["member_removed"] and not 现有.get("member_removed")):
+        现有 = {字段: 状态[字段] for 字段 in ("appid", "group_id", "member_id", "member_removed", "member_removed_at", "member_state_version")}
+        _群成员移除状态缓存[键] = 现有
+    return copy.deepcopy(现有)
+
+
+def _群成员状态资料(数据库键: str, 会话标识: str, 成员标识: str, appid: str) -> dict[str, Any]:
+    状态 = _群成员移除状态缓存.get((数据库键, appid, 会话标识, 成员标识))
+    return {字段: 值 for 字段, 值 in (状态 or {}).items() if 字段 != "member_id"}
+
+
+def _推送群成员状态(数据库键: str, 会话标识: str, 成员标识: str, appid: str) -> None:
+    if not _消息事件订阅 or _群成员状态上下文()[1] != 数据库键:
+        return
+    资料 = _群成员状态资料(数据库键, 会话标识, 成员标识, appid)
+    if 资料:
+        _投递网页消息事件({"type": "member_profiles", "data": {"chat_id": 会话标识, "chat_type": "group",
+            "appid": appid, "member_profiles": {成员标识: 资料}}})
+
+
+def _写入群成员状态项目(项目: dict[str, Any]) -> dict[str, Any] | None:
+    if _消息存储 is None or not isinstance(项目.get("database_snapshot"), dict):
+        return None
+    return _消息存储.执行数据库配置快照操作(
+        项目["database_snapshot"], partial(_消息存储.写入群成员移除状态, 项目["state"]),
+    )
+
+
+def _记录群成员新活动(会话标识: str, 成员标识: str, appid: str, 时间: Any) -> None:
+    版本 = _群成员状态版本(时间)
+    if not 版本 or not re.fullmatch(r"[0-9]{4,32}", str(appid or "")) or not 成员标识:
+        return
+    快照, 数据库键 = _群成员状态上下文()
+    if not 数据库键:
+        return
+    原状态 = _群成员移除状态缓存.get((数据库键, appid, 会话标识, 成员标识)) or {}
+    if 版本 <= int(原状态.get("member_state_version") or 0):
+        return
+    状态 = _接受群成员移除状态(数据库键, {"appid": appid, "group_id": 会话标识, "member_id": 成员标识,
+        "member_removed": False, "member_removed_at": 0, "member_state_version": 版本})
+    if 原状态.get("member_removed"):
+        _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
+        _排队消息持久化("group_member_state", {"database_snapshot": 快照, "state": 状态})
+
+
+async def 标记群成员已移除(会话标识: str, 成员标识: str, appid: str, *, 确认时间: Any = None) -> dict[str, Any]:
+    """仅供官方踢出已经明确成功的调用方使用；先更新展示，再等待持久化。"""
+    会话标识, 成员标识, appid = (str(值 or "").strip() for 值 in (会话标识, 成员标识, appid))
+    版本 = _群成员状态版本(time.time() if 确认时间 is None else 确认时间)
+    if not 会话标识 or not 成员标识 or not re.fullmatch(r"[0-9]{4,32}", appid) or not 版本:
+        return {"ok": False, "persisted": False, "member_removed": False}
+    快照, 数据库键 = _群成员状态上下文()
+    状态 = _接受群成员移除状态(数据库键, {"appid": appid, "group_id": 会话标识, "member_id": 成员标识,
+        "member_removed": True, "member_removed_at": 版本 // 1_000_000, "member_state_version": 版本})
+    _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
+    项目 = {"database_snapshot": 快照, "state": 状态}
+    已存 = None
+    try:
+        async with _数据库写入锁:
+            已存 = await _异步执行消息记录同步(_写入群成员状态项目, 项目)
+        if isinstance(已存, dict):
+            _接受群成员移除状态(数据库键, 已存)
+            _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
+    except asyncio.CancelledError:
+        _排队消息持久化("group_member_state", 项目)
+        raise
+    except Exception as 异常:
+        logger.warning("已移除群成员状态保存失败：错误类型=%s", type(异常).__name__)
+    if 已存 is None:
+        _排队消息持久化("group_member_state", 项目)
+    资料 = _群成员状态资料(数据库键, 会话标识, 成员标识, appid)
+    当前作用域 = _群成员状态上下文()[1] == 数据库键
+    return {"ok": True, "persisted": 已存 is not None, "member_removed": 资料.get("member_removed") is True,
+            "appid": appid, "chat_id": 会话标识, "scope_current": 当前作用域, "member_profile": 资料 if 当前作用域 else {}}
+
+
+def _恢复群成员移除状态(快照: dict[str, Any]) -> None:
+    数据库快照, 数据库键 = _群成员状态上下文()
+    for 状态键, 原值 in (快照.get("member_states") or {}).items():
+        try:
+            状态 = json.loads(原值) if isinstance(原值, str) else 原值
+            if not isinstance(状态, dict):
+                continue
+            身份 = [状态.get(字段) for 字段 in ("appid", "group_id", "member_id")]
+            if 状态键 != hashlib.sha256(json.dumps(身份, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest():
+                continue
+            当前 = _接受群成员移除状态(数据库键, 状态)
+            if 当前 and 当前.get("member_state_version", 0) > 状态.get("member_state_version", 0):
+                _排队消息持久化("group_member_state", {"database_snapshot": 数据库快照, "state": 当前})
+        except (TypeError, ValueError, KeyError):
+            continue
+
+
 def _获取消息相关成员资料(
     会话标识: str,
     消息列表: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
@@ -2261,6 +2421,15 @@ def _获取消息相关成员资料(
                       nickname_source=联系人["nickname_source"], appid=应用)
             if 联系人["avatar"]:
                 资料["avatar"] = 联系人["avatar"]
+    群应用 = {str(消息.get("appid") or "").strip() for 消息 in 消息列表 or ()
+             if isinstance(消息, dict) and str(消息.get("chat_type") or "group") == "group"}
+    if len(群应用) == 1:
+        应用 = next(iter(群应用))
+        _, 数据库键 = _群成员状态上下文()
+        for 成员标识 in 相关标识:
+            资料 = _群成员状态资料(数据库键, str(会话标识), 成员标识, 应用)
+            if 资料:
+                结果.setdefault(成员标识, {}).update(资料)
     return 结果
 
 
@@ -4322,6 +4491,8 @@ def 记录收到消息(
             "chat_type": 类型,
             "ts": _转数字时间戳(时间戳) or int(time.time()),
         }
+        if 类型 == "group" and not is_self and 源 == "qq_official" and not 是本地系统消息(消息ID, 源):
+            _记录群成员新活动(会话标识, 成员标识, str(appid or ""), _读取字段(消息, "timestamp"))
         _补充记录昵称状态(记录, 消息)
         _记录私聊作者昵称(会话, 记录, 消息)
         _归一化记录媒体文字(记录)
@@ -4346,6 +4517,9 @@ def 记录收到消息(
                         },
                     )
         撤回键 = (会话标识, 消息ID)
+        _, 当前数据库键 = _群成员状态上下文()
+        if 类型 == "group" and _群消息撤回标记有效((当前数据库键, str(appid or ""), 会话标识, 消息ID)):
+            记录["recalled"] = True
         待同步时间 = 已撤回消息待同步.get(撤回键)
         if 待同步时间 is not None:
             if time.time() - float(待同步时间 or 0) < 10 * 60:
@@ -4470,6 +4644,7 @@ def _读取好友关系启动快照(配置: Any) -> dict[str, Any] | None:
     快照 = _消息存储.读取启动快照(配置, 群机器人状态命名空间, 未读状态命名空间)
     if 快照 is not None:
         快照["friend_states"] = 运行状态数据库.读取运行状态命名空间(配置, 好友关系状态命名空间)
+        快照["member_states"] = _消息存储.执行数据库配置快照操作(配置, _消息存储.读取群成员移除状态快照)
     return 快照
 
 
@@ -4728,6 +4903,8 @@ async def 记录群成员系统消息(
             pass
 
     应用 = str(appid or "").strip()
+    if 事件类型 == "group_member_add":
+        _记录群成员新活动(群标识, 成员标识, 应用, 时间戳)
     if _关联批量移除:
         if 事件类型 == "group_member_add":
             近期 = _群移除回调去重.get((应用, 群标识, 成员标识))
@@ -5539,6 +5716,119 @@ async def 获取群成员最近消息编号(
             候选[编号] = dict(记录)
     最近记录 = sorted(候选.values(), key=lambda 记录: 记录["ts"], reverse=True)[:上限 - 1]
     return [当前消息, *[记录["message_id"] for 记录 in 最近记录 if not 记录["recalled"]]]
+
+
+async def 获取群成员最近可撤回消息编号(
+    会话标识: str, 用户标识: str, appid: str = "", 上限: int = 40, *, 截至时间: Any = None,
+) -> list[str]:
+    """冻结本群真实消息最近四十条，再过滤不可撤回项；不从更老消息补足。"""
+    会话标识, 用户标识, appid = (str(值 or "").strip() for 值 in (会话标识, 用户标识, appid))
+    if not appid:
+        应用 = {str(会话.get("appid") or "").strip() for 标识, 会话 in _遍历作用域会话缓存()
+                if 标识 == 会话标识 and 会话.get("chat_type") == "group"}
+        appid = next(iter(应用)) if len(应用) == 1 else ""
+    if not 会话标识 or not 用户标识 or not re.fullmatch(r"[0-9]{4,32}", appid) or _消息存储 is None:
+        return []
+    上限 = max(1, min(40, int(上限)))
+    截止版本 = _群成员状态版本(time.time() if 截至时间 is None else 截至时间)
+    if not 截止版本:
+        return []
+    截止 = 截止版本 / 1_000_000
+    数据库快照, 数据库键 = _群成员状态上下文()
+    会话 = _读取作用域会话缓存(会话标识, "group", appid)
+    缓存 = []
+    for 项 in 会话.get("messages") or ():
+        if not isinstance(项, dict) or (
+            str(项.get("appid") or "") != appid or str(项.get("chat_type") or "") != "group"
+            or str(项.get("_session") or 会话标识) != 会话标识 or str(项.get("user_id") or "") != 用户标识
+            or 是本地系统消息(项.get("message_id"), 项.get("source"))
+            or int(项.get("ts") or 0) > 截止
+        ):
+            continue
+        记录 = copy.deepcopy(项)
+        记录["_recall_id"] = _消息存储.恢复群消息完整编号(记录.get("message_id"), 记录.get("raw_message"), 会话标识, 用户标识, appid)
+        if 记录["_recall_id"]:
+            记录["message_id"] = 记录["_recall_id"]
+        缓存.append(记录)
+    数据库记录 = []
+    if _消息数据库已配置():
+        数据库记录 = await _异步执行消息记录同步(
+            _消息存储.执行数据库配置快照操作, 数据库快照,
+            partial(_消息存储.读取群成员最近可撤回候选, 会话标识, 用户标识, appid, 截止, 上限),
+        )
+        if 数据库记录 is None:
+            raise RuntimeError("recent_messages_unavailable")
+    # 同一记录的撤回/保护状态取并集，按稳定历史身份或完整 ID 合并缓存与数据库。
+    候选: list[dict[str, Any]] = []
+    索引: dict[tuple[Any, ...], int] = {}
+    for 项 in [*(数据库记录 or []), *缓存]:
+        if not isinstance(项, dict) or str(项.get("appid") or "") != appid or 项.get("chat_type") != "group" or str(项.get("_session") or 会话标识) != 会话标识 or str(项.get("user_id") or "") != 用户标识:
+            continue
+        if 是本地系统消息(项.get("message_id"), 项.get("source")) or int(项.get("ts") or 0) > 截止:
+            continue
+        身份 = []
+        编号 = _规范消息ID(项.get("message_id"))
+        if 编号:
+            身份.append(("message", 编号))
+        if 项.get("history_origin") and type(项.get("history_order")) is int and 项["history_order"] > 0:
+            身份.append(("history", 项["history_origin"], 项["history_order"]))
+        位置 = next((索引[键] for 键 in 身份 if 键 in 索引), None)
+        if 位置 is None:
+            位置 = len(候选)
+            候选.append(dict(项))
+        else:
+            已有 = 候选[位置]
+            已有["recalled"] = bool(已有.get("recalled") or 项.get("recalled"))
+            已有["is_self"] = bool(已有.get("is_self") or 项.get("is_self"))
+            已有["is_bot"] = bool(已有.get("is_bot") or 项.get("is_bot"))
+            if _规范QQ群成员角色(项.get("member_role")) in {"owner", "admin"}:
+                已有["member_role"] = 项["member_role"]
+            if 项.get("_recall_id") and (not 已有.get("_recall_identity_checked") or 已有.get("_recall_id")):
+                已有["_recall_id"] = 项["_recall_id"]
+        for 键 in 身份:
+            索引[键] = 位置
+    def 撤回排序键(记录: dict[str, Any]) -> tuple[int, bool, int, str]:
+        当前进程 = str(记录.get("history_origin") or "") == _聊天记录接收来源
+        顺序 = int(记录.get("history_order") or 0) if 当前进程 else int(记录.get("id") or 0)
+        return int(记录.get("ts") or 0), 当前进程, 顺序, _规范消息ID(记录.get("message_id"))
+    窗口 = sorted(候选, key=撤回排序键, reverse=True)[:上限]
+    结果 = []
+    for 记录 in 窗口:
+        编号 = 记录.get("_recall_id")
+        if (not 编号 or 记录.get("recalled") or 记录.get("is_self") or 记录.get("is_bot") or _规范QQ群成员角色(记录.get("member_role")) in {"owner", "admin"}
+                or _群消息撤回标记有效((数据库键, appid, 会话标识, 编号))):
+            continue
+        if 编号 not in 结果:
+            结果.append(编号)
+    return 结果
+
+
+async def 异步标记群消息撤回(会话标识: str, 消息ID: str, appid: str) -> bool:
+    """仅标记本数据库、本机器人、本群的真实消息；旧两元去重表不参与。"""
+    会话标识, 消息ID, appid = (str(值 or "").strip() for 值 in (会话标识, 消息ID, appid))
+    if (not 会话标识 or not 消息ID or len(消息ID) > 512 or 是本地系统消息(消息ID)
+            or not all(33 <= ord(字符) <= 126 for 字符 in 消息ID) or not re.fullmatch(r"[0-9]{4,32}", appid)):
+        return False
+    数据库快照, 数据库键 = _群成员状态上下文()
+    当前时间 = time.time()
+    for 键, 时间 in list(_群消息撤回待同步.items()):
+        if 当前时间 - 时间 >= 600:
+            _群消息撤回待同步.pop(键, None)
+    _群消息撤回待同步[(数据库键, appid, 会话标识, 消息ID)] = 当前时间
+    会话 = _读取作用域会话缓存(会话标识, "group", appid)
+    找到 = False
+    for 记录 in 会话.get("messages") or ():
+        if (isinstance(记录, dict) and str(记录.get("appid") or "") == appid and 记录.get("chat_type") == "group"
+                and str(记录.get("_session") or 会话标识) == 会话标识 and _规范消息ID(记录.get("message_id")) == 消息ID):
+            记录["recalled"] = True
+            找到 = True
+            _推送消息事件(记录, 会话)
+    if _消息存储 is None or not _消息数据库已配置():
+        return 找到
+    async with _数据库写入锁:
+        已存 = await _异步执行消息记录同步(_消息存储.执行数据库配置快照操作, 数据库快照,
+            partial(_消息存储.标记群消息撤回, 会话标识, 消息ID, appid))
+    return bool(找到 or 已存)
 
 
 async def 异步标记撤回(会话标识: str, 消息ID: str) -> bool:
@@ -10905,6 +11195,7 @@ async def 等待消息记录恢复() -> bool:
 def _从数据库恢复(快照: dict[str, Any], 基线: dict[str, Any]) -> None:
     """在事件循环合并线程快照；恢复期间新消息、群状态和未读数优先。"""
     _恢复好友关系状态(快照, 基线)
+    _恢复群成员移除状态(快照)
     已更新群 = {
         (str(信息.get("appid") or "").strip(), 标识)
         for 标识, 信息 in 群信息缓存.items()

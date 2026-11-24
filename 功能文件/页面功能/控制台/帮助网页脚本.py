@@ -2588,6 +2588,9 @@
       };
       const msgMatchesCurrent = (type, id, appid) => msgState.chatType === type && msgState.chatId === String(id || '')
         && Boolean(appid) && String(appid) === msgState.chatAppid && String(appid) === msgState.selectedAppid;
+      let msgMemberScopeGeneration = 0;
+      const msgMemberStateCache = new Map();
+      const msgConfirmedRecallScopes = new Map();
       let composerImageObjectUrl = '';
       const releaseComposerImagePreview = () => {
         if (composerImageObjectUrl) URL.revokeObjectURL(composerImageObjectUrl);
@@ -2906,6 +2909,34 @@
       };
       const msgLivePrivateNickname = (chat, id) => chat?._private_nickname_blank === true
         ? '\u00a0' : validMsgNickname(chat?._private_nickname, id);
+      const msgGroupProfileMatches = (profile) => Boolean(profile && msgState.chatType === 'group'
+        && (!profile.appid || String(profile.appid).trim() === msgState.chatAppid)
+        && (!profile.group_id || String(profile.group_id) === msgState.chatId)
+        && (!profile.group_openid || String(profile.group_openid) === msgState.chatId));
+      const msgMemberState = (profile) => {
+        if (!msgGroupProfileMatches(profile) || String(profile.appid || '').trim() !== msgState.chatAppid
+          || String(profile.group_id || profile.group_openid || '') !== msgState.chatId
+          || typeof profile.member_removed !== 'boolean') return null;
+        const version = Number(profile.member_state_version);
+        const removedAt = Number(profile.member_removed_at);
+        return {appid:msgState.chatAppid, group_id:msgState.chatId, member_removed:profile.member_removed,
+          member_state_version:Number.isSafeInteger(version) && version > 0 ? version : 0,
+          member_removed_at:Number.isFinite(removedAt) && removedAt > 0 ? removedAt : 0};
+      };
+      const preferMsgMemberState = (previous, incoming) => {
+        if (!previous) return incoming;
+        if (!incoming) return previous;
+        if (incoming.member_state_version > previous.member_state_version) return incoming;
+        if (incoming.member_state_version < previous.member_state_version) return previous;
+        return !previous.member_state_version && incoming.member_removed === true ? incoming : previous;
+      };
+      const msgMemberRemoved = (message, profile = {}) => {
+        if (msgState.chatType !== 'group' || String(message?.chat_type || 'group') !== 'group'
+          || (message?.appid && String(message.appid).trim() !== msgState.chatAppid)
+          || String(message?.chat_id || message?._session || msgState.chatId) !== msgState.chatId) return false;
+        const key = JSON.stringify([msgState.chatAppid, msgState.chatId, String(message?.user_id || '')]);
+        return preferMsgMemberState(msgMemberStateCache.get(key), msgMemberState(profile))?.member_removed === true;
+      };
       const mergeMsgProfileMaps = (...sources) => {
         const merged = {};
         sources.forEach((source) => {
@@ -2913,11 +2944,16 @@
             if (!profile || typeof profile !== 'object') return;
             const key = String(id || '').trim();
             if (!key) return;
+            if (msgState.chatType === 'group' && !msgGroupProfileMatches(profile)) return;
             const isPrivateContact = msgState.chatType === 'user' && key === String(msgState.chatId || '');
             if (isPrivateContact && !msgPrivateContactScope(key, profile)) return;
             const next = {...(merged[key] || {})};
+            const memberKey = JSON.stringify([msgState.chatAppid, msgState.chatId, key]);
+            const memberState = preferMsgMemberState(
+              preferMsgMemberState(msgMemberStateCache.get(memberKey), msgMemberState(next)), msgMemberState(profile));
             const nameState = isPrivateContact ? pickMsgNicknameState(key, next, profile) : null;
             Object.entries(profile).forEach(([field, value]) => {
+              if (['member_removed','member_removed_at','member_state_version'].includes(field)) return;
               if (isPrivateContact && ['nickname','username','nickname_blank','nickname_ts','nickname_source'].includes(field)) return;
               if (field === 'nickname' || field === 'username') {
                 const name = validMsgNickname(value, key);
@@ -2933,6 +2969,11 @@
             });
             if (isPrivateContact && nameState) Object.assign(next, nameState, {username:nameState.nickname});
             else if (!isPrivateContact && validMsgNickname(next.nickname || next.username, key)) next.nickname_blank = false;
+            if (memberState) {
+              Object.assign(next, memberState);
+              msgMemberStateCache.delete(memberKey); msgMemberStateCache.set(memberKey, memberState);
+              while (msgMemberStateCache.size > 4096) msgMemberStateCache.delete(msgMemberStateCache.keys().next().value);
+            }
             merged[key] = next;
           });
         });
@@ -2964,6 +3005,30 @@
           if (role) return role;
         }
         return '';
+      };
+      const msgMemberTagState = (message, profile, isSelf, botAuthor, memberRole) => {
+        const removed = !isSelf && !botAuthor && msgMemberRemoved(message, profile);
+        const group = msgState.chatType === 'group' && String(message.chat_type || 'group') === 'group';
+        const role = !removed && group ? ({owner:'群主', admin:'管理员', member:'群成员'}[memberRole] || '') : '';
+        const tags = [];
+        if (removed) tags.push('<span class="msg-tag member-removed">已移除</span>');
+        else if (role) tags.push(`<span class="msg-tag role ${memberRole}">${role}</span>`);
+        else if (!isSelf && !botAuthor && group
+          && (!message.appid || String(message.appid).trim() === msgState.chatAppid)
+          && String(message.chat_id || message._session || msgState.chatId) === msgState.chatId
+          && ['', 'qq_official'].includes(String(message.source || '').trim()) && Boolean(String(message.user_id || '').trim())) {
+          tags.push('<span class="msg-tag group-member">群成员</span>');
+        }
+        return {removed, tags};
+      };
+      const applyMsgMemberProfiles = (data, refresh = true) => {
+        if (data?.chat_type !== 'group' || !msgMatchesCurrent('group', data.chat_id, String(data.appid || ''))) return false;
+        const previous = JSON.stringify(msgState.profiles || {});
+        msgState.profiles = mergeMsgProfileMaps(msgState.profiles, data.member_profiles);
+        const changed = previous !== JSON.stringify(msgState.profiles);
+        if (msgState.historyData) msgState.historyData = {...msgState.historyData, member_profiles:msgState.profiles};
+        if (changed && refresh) rerenderMsgRoleTags();
+        return changed;
       };
       const mergeMsgProfiles = (profiles, messages = []) => {
         const merged = mergeMsgProfileMaps(profiles);
@@ -3603,6 +3668,8 @@
         discardMsgHistoryPrefetch();
         closeMsgHeadMenu(); closeAdminPopover();
         msgState.scopeGeneration += 1;
+        msgMemberScopeGeneration += 1;
+        msgMemberStateCache.clear();
         for (const key of ['historyAbort','historyOlderAbort','chatListAbort']) { msgState[key]?.abort(); msgState[key] = null; }
         msgState.historyRequest += 1; msgState.historyOlderRequest += 1; msgState.chatListRequest += 1; msgState.historyScheduleToken += 1;
         if (msgState.historyScheduleFrame != null) { cancelAnimationFrame(msgState.historyScheduleFrame); msgState.historyScheduleFrame = null; }
@@ -4713,6 +4780,7 @@
           : Boolean(chat?.is_admin || localAdmins.has(chatId));
         if (cachedAdmin && !msgState.adminByChat.has(chatId)) msgState.adminByChat.set(chatId, true);
         const sameChat = msgMatchesCurrent(chatType, chatId, chat.appid);
+        msgMemberScopeGeneration += 1;
         // 每次点选会话都重新执行首屏定位，同一会话也不能沿用旧滚动位置。
         msgState.initialScrollChatId = chatId;
         msgState.bottomFollowPaused = false;
@@ -5096,6 +5164,7 @@
           if (envelope?.type === 'message') { applyMsgRealtimeEvent(envelope.data || {}); scheduleMsgRealtimeRefresh(); }
           else if (envelope?.type === 'group_status') applyMsgGroupStatus(envelope.data || {});
           else if (envelope?.type === 'group_info') applyMsgGroupInfo(envelope.data || {});
+          else if (envelope?.type === 'member_profiles') applyMsgMemberProfiles(envelope.data || {});
           else if (envelope?.type === 'private_profile' && Number(envelope.data?.friend_checked_at) > 0) {
             applyMsgPrivateProfile(envelope.data, {friendCheckedAt:envelope.data.friend_checked_at});
           }
@@ -5561,14 +5630,49 @@
           && (isSelf || (msgState.botIsAdmin && !protectedRole));
       };
       const msgKickInFlight = new Set();
-      const msgKickTargetCurrent = (target, generation) =>
-        activeView === 'messages' && consoleGeneration === generation && !msgState.chatRemoved
-        && msgMatchesCurrent('group', target.chat_id, target.appid)
-        && msgState.selectedAppid === target.appid;
+      const msgMemberOperationContext = () => ({console:consoleGeneration, scope:msgMemberScopeGeneration});
+      const msgKickTargetCurrent = (target, generation) => {
+        return activeView === 'messages' && consoleGeneration === generation?.console
+          && msgMemberScopeGeneration === generation?.scope && !msgState.chatRemoved
+          && msgMatchesCurrent('group', target.chat_id, target.appid) && msgState.selectedAppid === target.appid;
+      };
+      const msgRecallResultText = (result) => {
+        const summary = result?.recall_summary;
+        if (!summary || !['selected','succeeded','failed','skipped'].every((key) => Number.isSafeInteger(summary[key]) && summary[key] >= 0)) {
+          return result?.recall_incomplete === true ? '；近期消息撤回未完成，请刷新确认' : '';
+        }
+        const incomplete = result.recall_incomplete === true || summary.failed > 0 || summary.skipped > 0;
+        return `；已撤回 ${summary.succeeded} 条${incomplete ? '，部分近期消息未能完成撤回' : ''}`;
+      };
+      const applyMsgRemovedMembersResult = (target, generation, result, requested) => {
+        if (result?.member_scope_current === false || !msgKickTargetCurrent(target, generation)) return new Set();
+        const allowed = new Set(requested);
+        const removed = new Set([...(Array.isArray(result.removed_openids) ? result.removed_openids : []),
+          ...(Array.isArray(result.removed_member_openids) ? result.removed_member_openids : [])]
+          .filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id) && allowed.has(id)));
+        if (!removed.size) return removed;
+        const profiles = {};
+        removed.forEach((id) => {
+          const supplied = result.member_profiles?.[id] || (removed.size === 1 ? result.member_profile : null);
+          profiles[id] = supplied && typeof supplied === 'object' && typeof supplied.member_removed === 'boolean'
+            ? supplied : {...(msgState.profiles[id] || {}), appid:target.appid, group_id:target.chat_id,
+              member_removed:true, member_removed_at:Date.now() / 1000};
+        });
+        applyMsgMemberProfiles({...target, member_profiles:profiles}, false);
+        const recalled = new Set((Array.isArray(result.recalled_message_ids) ? result.recalled_message_ids : [])
+          .filter((id) => typeof id === 'string' && id.trim() && id.length <= 512));
+        recalled.forEach((id) => markLocalMessageRecalled(id, {render:false}));
+        discardMsgHistoryPrefetch();
+        msgState.historyCache.delete(msgScopeKey('group', target.chat_id, target.appid));
+        rerenderMsgRoleTags();
+        return removed;
+      };
       const msgKickMemberId = (row, target) => {
         if (!row?.isConnected || row.dataset.msgKickScope !== msgScopeKey('group', target.chat_id, target.appid)
           || row.dataset.msgSelf === '1') return '';
         const uid = row.dataset.msgUid || '';
+        if (row.dataset.msgMemberRemoved === '1' || msgMemberRemoved(
+          {user_id:uid, appid:target.appid, chat_id:target.chat_id, chat_type:'group'}, msgState.profiles[uid] || {})) return '';
         const protectedRoles = ['owner', 'admin', 'administrator'];
         const roles = [row.dataset.msgRole, msgState.profiles[uid]?.role];
         if (roles.some((role) => protectedRoles.includes(String(role || '').trim().toLowerCase()))) return '';
@@ -5580,17 +5684,18 @@
         if (msgKickInFlight.has(key)) return;
         const group = $('msg-head-name')?.textContent || target.chat_id;
         const nickname = row.dataset.msgNick || uid;
-        if (!confirm(`确认将「${nickname}」踢出群聊「${group}」？`)) return;
+        if (!confirm(`确认将「${nickname}」踢出群聊「${group}」？\n同时自动批量撤回该用户在本群最近 40 条消息。`)) return;
         if (!msgKickTargetCurrent(target, generation) || msgKickMemberId(row, target) !== uid) return;
         msgKickInFlight.add(key);
         try {
           const result = await groupSettingsRequest({target}, 'message/group-members/remove', {member_openids:[uid]});
           if (!msgKickTargetCurrent(target, generation)) return;
-          if (result.ok !== true || !Array.isArray(result.removed_openids) || !result.removed_openids.includes(uid)) {
+          const removed = applyMsgRemovedMembersResult(target, generation, result, [uid]);
+          if (!removed.has(uid)) {
             toast('成员移除结果未确认，请刷新成员列表');
             return;
           }
-          toast('成员已移除');
+          toast('成员已移除' + msgRecallResultText(result));
           void loadMsgChats(true);
         } catch (error) {
           if (!msgKickTargetCurrent(target, generation)) return;
@@ -5602,7 +5707,7 @@
       };
       const msgKickMenuItem = (row) => {
         const target = captureGroupTarget();
-        const generation = consoleGeneration;
+        const generation = msgMemberOperationContext();
         if (!target || !msgKickTargetCurrent(target, generation)) return null;
         const uid = msgKickMemberId(row, target);
         if (!uid) return null;
@@ -6124,13 +6229,17 @@
         return value === true || value === 1 || ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
       };
       const mergeMsgRecalledStates = (incoming, current = msgState.messages) => {
+        const confirmed = msgConfirmedRecallScopes.get(msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid)) || new Set();
         const recalledKeys = new Set((Array.isArray(current) ? current : [])
           .filter((message) => msgIsRecalled(message))
           .map((message) => msgMessageKey(message))
           .filter(Boolean));
         return (Array.isArray(incoming) ? incoming : []).map((message) => {
           const key = msgMessageKey(message);
-          return key && recalledKeys.has(key) && !msgIsRecalled(message)
+          const matches = (!message?.appid || String(message.appid) === msgState.chatAppid)
+            && (!message?.chat_type || message.chat_type === msgState.chatType)
+            && String(message?.chat_id || message?._session || msgState.chatId) === msgState.chatId;
+          return matches && key && (recalledKeys.has(key) || confirmed.has(key)) && !msgIsRecalled(message)
             ? {...message, recalled:true}
             : message;
         });
@@ -7728,25 +7837,16 @@
           if (m.source === 'web_panel') tags.push('<span class="msg-tag">网页</span>');
           if (recalled) tags.push('<span class="msg-tag recalled">已撤回</span>');
           if (isMuted) tags.push('<span class="msg-tag muted" data-msg-mute-tag="1">被禁言</span>');
-          const roleMap = {owner:'群主', admin:'管理员', member:'群成员'};
           const messageRole = msgMemberRole(m, profile);
           const botRole = currentBotMemberRole(m, isSelf);
           const memberRole = botRole || messageRole;
+          const memberTags = msgMemberTagState(m, profile, isSelf, botAuthor, memberRole);
           const kickScope = msgState.chatType === 'group' && m.chat_type === 'group' && m.source === 'qq_official'
-            && !isSelf && !botAuthor && m.appid === msgState.chatAppid
+            && !isSelf && !botAuthor && !memberTags.removed && m.appid === msgState.chatAppid
             && (!m._session || m._session === msgState.chatId) && (!m.chat_id || m.chat_id === msgState.chatId)
             ? msgScopeKey('group', msgState.chatId, msgState.chatAppid) : '';
           const protectedRole = !isSelf && (memberRole === 'owner' || memberRole === 'admin');
-          const roleTag = msgState.chatType === 'group' && String(m.chat_type || 'group') === 'group'
-            ? (roleMap[memberRole] || '') : '';
-          if (roleTag) tags.push(`<span class="msg-tag role ${memberRole}">${roleTag}</span>`);
-          // 群消息发送者的展示标签不代表已确认的权限角色。
-          const showGroupMember = !roleTag && !isSelf && !msgIsBot(m, profile)
-            && msgState.chatType === 'group' && String(m.chat_type || 'group') === 'group'
-            && (!m.appid || String(m.appid).trim() === String(msgState.chatAppid))
-            && String(m.chat_id || m._session || msgState.chatId) === String(msgState.chatId)
-            && ['', 'qq_official'].includes(systemSource) && Boolean(String(m.user_id || '').trim());
-          if (showGroupMember) tags.push('<span class="msg-tag group-member">群成员</span>');
+          tags.push(...memberTags.tags);
           const renderText = (text) => String(text || '');
           // 引用标识只用于查找，未取得原消息时不把协议 ID 当作正文显示。
           const quote = m.reference_id || m.reference_preview ? renderMsgQuote(referenceIndex.get(String(m.reference_id)), profiles, m.reference_id, m.reference_preview, referenceIndex.blocked?.has(String(m.reference_id))) : '';
@@ -7810,7 +7910,7 @@
           const muteStatusHtml = isMuted
             ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
             : '';
-          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-kick-scope="${esc(kickScope)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${hasRawData ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
+          html += `<div class="msg-row ${isSelf ? 'self' : ''}${isMuted ? ' muted' : ''}${msgState.multi ? ' multi-mode' : ''}${isSelected ? ' selected' : ''}${multiEnabled ? '' : ' no-multi'}${optimisticEntry ? ' optimistic' : ''}" tabindex="0" aria-haspopup="menu" aria-label="消息，右键或按 Shift+F10 打开操作菜单" data-msg-render-key="${esc(renderKey)}" data-msg-mid="${esc(m.message_id)}" data-msg-uid="${esc(m.user_id)}" data-msg-nick="${esc(displayNickname)}" data-msg-refidx="${esc(m.refidx || '')}" data-msg-role="${esc(memberRole)}" data-msg-member-removed="${memberTags.removed ? '1' : '0'}" data-msg-kick-scope="${esc(kickScope)}" data-msg-self="${isSelf ? '1' : ''}" data-msg-recalled="${recalled ? '1' : ''}" data-msg-optimistic="${esc(optimisticId)}" data-msg-send-status="${esc(sendState)}" data-msg-raw-key="${hasRawData ? esc(rawKey) : ''}" data-msg-content="${esc(m.content || '')}">
             <span class="msg-pos">
               <span class="msg-multi-check"></span>
               <span class="msg-avatar${isMuted ? ' muted' : ''}">${avatarHtml(av, displayNickname || '?')}</span>
@@ -8579,17 +8679,26 @@
           if (isAdmin) void loadMuteStates();
         });
       };
-      const markLocalMessageRecalled = (messageId) => {
+      const markLocalMessageRecalled = (messageId, {render = true} = {}) => {
         discardMsgHistoryPrefetch();
         const id = String(messageId || '').trim();
         if (!id) return;
+        const scope = msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid);
+        const confirmed = msgConfirmedRecallScopes.get(scope) || new Set();
+        confirmed.add(id);
+        while (confirmed.size > 4096) confirmed.delete(confirmed.values().next().value);
+        msgConfirmedRecallScopes.delete(scope); msgConfirmedRecallScopes.set(scope, confirmed);
+        while (msgConfirmedRecallScopes.size > 16) msgConfirmedRecallScopes.delete(msgConfirmedRecallScopes.keys().next().value);
         let changed = false;
         msgState.messages = msgState.messages.map((message) => {
+          if ((message?.appid && String(message.appid) !== msgState.chatAppid)
+            || (message?.chat_type && message.chat_type !== msgState.chatType)
+            || String(message?.chat_id || message?._session || msgState.chatId) !== msgState.chatId) return message;
           if (String(message?.message_id || '') !== id || message.recalled) return message;
           changed = true;
           return {...message, recalled:true};
         });
-        if (!changed || $('page-messages')?.hidden) return;
+        if (!changed || !render || $('page-messages')?.hidden) return;
         const body = $('msg-body');
         renderMsgMessages(
           {...(msgState.historyData || {}), messages:msgState.messages},
@@ -9048,19 +9157,20 @@
         const session = groupSettingsState.session;
         if (!groupSettingsCurrent(session) || $('msg-group-members-remove').disabled) return;
         const ids = Array.from(session.members.selected);
+        const generation = msgMemberOperationContext();
         const addToBlacklist = $('msg-group-remove-blacklist').checked;
         if (ids.length < 1 || ids.length > 20) return groupSettingsMessage('members', '每次请选择 1 至 20 位成员', true);
-        if (!confirm(`确认从「${session.name}」移除选中的 ${ids.length} 位成员？${addToBlacklist ? '\n同时请求将这些成员加入本群黑名单。' : ''}`)) return;
+        if (!confirm(`确认从「${session.name}」移除选中的 ${ids.length} 位成员？\n同时自动批量撤回每位成功移除成员在本群最近 40 条消息。${addToBlacklist ? '\n同时请求将这些成员加入本群黑名单。' : ''}`)) return;
         await mutateGroupSettings(session, 'members', async () => {
           const data = await groupSettingsRequest(session, 'message/group-members/remove', {member_openids:ids, add_to_member_blacklist:addToBlacklist});
           if (!groupSettingsCurrent(session)) return;
-          const removed = new Set(data.removed_member_openids || data.removed_openids || []);
+          const removed = applyMsgRemovedMembersResult(session.target, generation, data, ids);
           const failed = data.failed_member_openids || ids.filter((id) => !removed.has(id));
           const blacklistFailed = data.blacklist_failed_member_openids || data.add_to_member_blacklist_fail_openids || [];
           session.blacklistPendingIds = blacklistFailed.filter((id) => ids.includes(id));
           session.members.rows = session.members.rows.filter((member) => !removed.has(member.member_openid));
           session.members.selected = new Set(failed.filter((id) => ids.includes(id)));
-          const resultMessage = data.message || `已移除 ${removed.size} 人${failed.length ? `，${failed.length} 人未移除，已保留选择` : ''}`;
+          const resultMessage = (data.message || `已移除 ${removed.size} 人${failed.length ? `，${failed.length} 人未移除，已保留选择` : ''}`) + msgRecallResultText(data);
           groupSettingsMessage('members', resultMessage + (session.blacklistPendingIds.length ? `；加入黑名单失败的 OpenID：${session.blacklistPendingIds.join('、')}` : ''), Boolean(failed.length || blacklistFailed.length || data.blacklist_unconfirmed === true));
           renderGroupSettingsRows(session, 'members');
           session.blacklist.loaded = false;

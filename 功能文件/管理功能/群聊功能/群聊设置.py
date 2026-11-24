@@ -7,6 +7,7 @@ import re
 import time
 from collections import deque
 from datetime import datetime
+from types import SimpleNamespace
 
 import aiohttp
 from astrbot.api import logger
@@ -401,6 +402,7 @@ def _批量移除昵称快照(chat_id, appid, member_openids):
 
 
 async def _执行批量移除(chat_id, appid, http, member_openids, add_to_member_blacklist):
+    固定数据库键 = 消息记录._群成员状态上下文()[1]
     请求体 = {"member_openids": list(member_openids)}
     if add_to_member_blacklist:
         请求体["add_to_member_blacklist"] = True
@@ -408,10 +410,13 @@ async def _执行批量移除(chat_id, appid, http, member_openids, add_to_membe
         名单 = _批量移除昵称快照(chat_id, appid, member_openids)
         批次 = 消息记录.暂存批量群移除(chat_id, appid, member_openids, 名单)
         已确认 = False
+        确认时间 = None
         try:
             结果 = await _请求(chat_id, appid, http, "remove", "POST", "/v2/groups/%s/batch_remove_members" % chat_id,
                            body=请求体)
             已确认 = bool(结果["ok"] and 结果["data"].get("remove_members_result") == "success")
+            if 已确认:
+                确认时间 = time.time()
         finally:
             # 超时或热重载取消后也失效旧列表，不重放操作或宣称成功。
             _清缓存(appid, chat_id)
@@ -432,10 +437,121 @@ async def _执行批量移除(chat_id, appid, http, member_openids, add_to_membe
             文案 += "，加入黑名单结果未确认，请查看黑名单"
         elif 失败:
             文案 += "，部分成员加入黑名单失败"
+        联动结果 = await _移除后撤回消息(chat_id, appid, http, member_openids, 确认时间, 固定数据库键)
         return {"ok": True, "partial": bool(失败) or 黑名单未确认,
                 "member_openids": list(member_openids), "removed_openids": list(member_openids),
                 "add_to_member_blacklist_fail_openids": 失败 or [], "blacklist_unconfirmed": 黑名单未确认,
-                "message": 文案}
+                "message": 文案, **联动结果}
+
+
+async def _移除后撤回消息(chat_id, appid, http, member_openids, 确认时间, 固定数据库键=None):
+    """仅在移除已确认后处理本群目标成员；撤回失败不撤销移除结果。"""
+    汇总 = {"selected": 0, "succeeded": 0, "failed": 0, "skipped": 0}
+    资料 = {}
+    已撤回 = []
+    待撤回 = []
+    标记完成 = True
+    查询未完成 = False
+    固定机器人 = SimpleNamespace(api=SimpleNamespace(_http=http))
+    if 固定数据库键 is None:
+        固定数据库键 = 消息记录._群成员状态上下文()[1]
+
+    def 作用域仍有效():
+        return 消息记录._群成员状态上下文()[1] == 固定数据库键
+
+    for 成员 in member_openids:
+        if not 作用域仍有效():
+            标记完成 = False
+            break
+        try:
+            标记 = await 消息记录.标记群成员已移除(chat_id, 成员, appid, 确认时间=确认时间)
+            if 标记.get("scope_current") is False:
+                标记完成 = False
+                break
+            if 标记.get("member_profile"):
+                资料[成员] = 标记["member_profile"]
+            标记完成 = 标记完成 and 标记.get("persisted") is True
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            标记完成 = False
+            # 移除已由平台确认，写库失败也不能把结果改成未移除。
+            if 作用域仍有效():
+                资料[成员] = {
+                    "appid": appid, "group_id": chat_id, "member_removed": True,
+                    "member_removed_at": 确认时间,
+                    "member_state_version": int(确认时间 * 1_000_000),
+                }
+            logger.warning("群移除联动处理失败：阶段=member_state，错误类型=%s", type(异常).__name__)
+    for 成员 in member_openids:
+        if not 作用域仍有效():
+            查询未完成 = True
+            break
+        try:
+            编号列表 = await 消息记录.获取群成员最近可撤回消息编号(
+                chat_id, 成员, appid=appid, 上限=40, 截至时间=确认时间,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            查询未完成 = True
+            logger.warning("群移除联动处理失败：阶段=recent_messages，错误类型=%s", type(异常).__name__)
+            continue
+        # 目标只来自服务端受限历史查询；额外去重，绝不从浏览器接受撤回编号。
+        if not isinstance(编号列表, list) or any(not isinstance(编号, str) for 编号 in 编号列表):
+            查询未完成 = True
+            continue
+        待撤回.extend(list(dict.fromkeys(编号列表))[:40])
+    待撤回 = list(dict.fromkeys(待撤回))
+    汇总["selected"] = len(待撤回)
+    async def 撤回一个(编号):
+        nonlocal 标记完成
+        if not 作用域仍有效() or str(getattr(getattr(http, "_token", None), "app_id", "")) != appid:
+            汇总["skipped"] += 1
+            return
+        try:
+            成功 = await 群管功能.使用QQ官方消息撤回(固定机器人, 编号, chat_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            汇总["failed"] += 1
+            错误码 = 群管功能.获取QQ官方撤回错误码(异常)
+            logger.warning(
+                "群移除联动处理失败：阶段=recall，HTTP状态=%s，业务码=%s，错误类型=%s",
+                getattr(异常, "http_status", "none"), 错误码, type(异常).__name__,
+            )
+            return
+        if 成功 is not True:
+            汇总["failed"] += 1
+            return
+        汇总["succeeded"] += 1
+        已撤回.append(编号)
+        if not 作用域仍有效():
+            标记完成 = False
+            return
+        try:
+            await 消息记录.异步标记群消息撤回(chat_id, 编号, appid)
+        except asyncio.CancelledError:
+            raise
+        except Exception as 异常:
+            标记完成 = False
+            # DELETE 已确认；只记录本地保存失败，不再次提交撤回。
+            logger.warning("群移除联动处理失败：阶段=recall_state，错误类型=%s", type(异常).__name__)
+    # 一次批次统一调度；底层复用官方已验证单消息接口及其共享QPS调度。
+    任务 = [asyncio.create_task(撤回一个(编号), name="移除成员批量撤回") for 编号 in 待撤回]
+    try:
+        await asyncio.gather(*任务)
+    finally:
+        for 单项 in 任务:
+            if not 单项.done():
+                单项.cancel()
+        await asyncio.gather(*任务, return_exceptions=True)
+    return {
+        "member_profiles": 资料 if 作用域仍有效() else {}, "member_state_persisted": 标记完成,
+        "member_scope_current": 作用域仍有效(),
+        "recall_summary": 汇总, "recalled_message_ids": 已撤回,
+        "recall_incomplete": 查询未完成 or not 标记完成 or bool(汇总["failed"] or 汇总["skipped"]),
+    }
 
 
 async def 操作群黑名单(chat_id, appid="", op="", member_openids=None, 上下文=None):

@@ -37,6 +37,7 @@ from 功能文件.管理功能.基础功能.消息工具 import (
 用户资料表名 = "mantou_message_user_profiles"
 群成员映射表名 = "mantou_message_member_links"
 元数据命名空间 = "message_panel_meta"
+群成员状态命名空间 = "qq_group_member_status"
 会话索引就绪键 = "conversation_summary_v2"
 群成员映射回填键 = "group_member_links_v1"
 统一用户资料回填键 = "user_profile_union_openid_v1"
@@ -2333,6 +2334,144 @@ def 标记消息撤回(会话标识: str, message_id: str) -> bool:
     except Exception as exc:
         logger.warning("消息记录 MySQL 撤回标记失败：错误类型=%s", type(exc).__name__)
         return False
+    finally:
+        _关闭连接(连接)
+
+
+def 读取群成员移除状态快照() -> dict[str, Any]:
+    """读取当前数据库的成员状态；状态键另含认证 AppID、群和成员身份。"""
+    if not _MySQL可用():
+        return {}
+    连接 = _打开连接()
+    if 连接 is None:
+        return {}
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(f"SELECT state_key,state_value FROM `{_运行状态表名()}` WHERE namespace=%s", (群成员状态命名空间,))
+            return {str(_行字段(行, 0, "state_key")): _行字段(行, 1, "state_value") for 行 in 游标.fetchall() or ()}
+    finally:
+        _关闭连接(连接)
+
+
+def 写入群成员移除状态(状态: dict[str, Any]) -> dict[str, Any] | None:
+    """锁定单成员运行状态，迟到的移除或活动不能覆盖更新的状态墓碑。"""
+    if not isinstance(状态, dict) or not _MySQL可用():
+        return None
+    身份 = [str(状态.get(字段) or "").strip() for 字段 in ("appid", "group_id", "member_id")]
+    版本 = 状态.get("member_state_version")
+    if (not re.fullmatch(r"[0-9]{4,32}", 身份[0]) or not all(身份)
+            or type(版本) is not int or not 0 < 版本 < 2**53
+            or type(状态.get("member_removed")) is not bool):
+        return None
+    键 = hashlib.sha256(json.dumps(身份, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    编码 = json.dumps(状态, ensure_ascii=False, separators=(",", ":"))
+    连接 = _打开连接()
+    if 连接 is None:
+        return None
+    try:
+        连接.begin()
+        with 连接.cursor() as 游标:
+            表 = _运行状态表名()
+            游标.execute(f"INSERT IGNORE INTO `{表}` (namespace,state_key,state_value,updated_at) VALUES (%s,%s,%s,%s)",
+                       (群成员状态命名空间, 键, 编码, int(time.time())))
+            游标.execute(f"SELECT state_value FROM `{表}` WHERE namespace=%s AND state_key=%s FOR UPDATE", (群成员状态命名空间, 键))
+            行 = 游标.fetchone()
+            已存 = json.loads(str(_行字段(行, 0, "state_value", 默认值="{}")))
+            if not isinstance(已存, dict) or [已存.get(字段) for 字段 in ("appid", "group_id", "member_id")] != 身份:
+                连接.rollback()
+                return None
+            原版本 = 已存.get("member_state_version")
+            if type(原版本) is not int:
+                连接.rollback()
+                return None
+            if 版本 > 原版本 or (版本 == 原版本 and 状态["member_removed"] and not 已存.get("member_removed")):
+                游标.execute(f"UPDATE `{表}` SET state_value=%s,updated_at=%s WHERE namespace=%s AND state_key=%s",
+                           (编码, int(time.time()), 群成员状态命名空间, 键))
+                已存 = 状态
+        连接.commit()
+        return dict(已存)
+    except Exception as 异常:
+        连接.rollback()
+        logger.warning("群成员移除状态保存失败：错误类型=%s", type(异常).__name__)
+        return None
+    finally:
+        _关闭连接(连接)
+
+
+def 标记群消息撤回(会话标识: str, message_id: str, appid: str) -> bool:
+    """新群管理链只更新明确机器人、群和完整消息 ID。"""
+    if not appid or not 会话标识 or not message_id or not _MySQL可用():
+        return False
+    连接 = _打开连接()
+    if 连接 is None:
+        return False
+    try:
+        with 连接.cursor() as 游标:
+            游标.execute(f"UPDATE `{消息记录表名}` SET recalled=1 WHERE BINARY 会话标识=BINARY %s AND BINARY message_id=BINARY %s AND BINARY appid=BINARY %s AND BINARY 消息类型=BINARY 'group'",
+                       (会话标识, message_id, appid))
+        连接.commit()
+        return True
+    finally:
+        _关闭连接(连接)
+
+
+def 读取群成员最近可撤回候选(会话标识: str, 用户标识: str, appid: str, 截至时间: float, 上限: int = 40) -> list[dict[str, Any]] | None:
+    """先取真实群消息窗口，再验证 ID；保护或已撤回项目仍占据窗口。"""
+    if not 会话标识 or not 用户标识 or not re.fullmatch(r"[0-9]{4,32}", appid) or not _MySQL可用():
+        return None
+    连接 = _打开连接()
+    if 连接 is None:
+        return None
+    try:
+        with 连接.cursor() as 游标:
+            来源占位 = ",".join(["%s"] * len(本地系统消息来源))
+            条件 = ["BINARY 会话标识=BINARY %s", "BINARY user_id=BINARY %s", "BINARY appid=BINARY %s", "BINARY 消息类型=BINARY 'group'", "ts<=%s",
+                  f"COALESCE(source,'') NOT IN ({来源占位})"]
+            参数: list[Any] = [会话标识, 用户标识, appid, 截至时间, *本地系统消息来源]
+            for 前缀 in 本地系统消息编号前缀:
+                条件.append("message_id NOT LIKE %s")
+                参数.append(前缀 + "%")
+            参数.append(max(1, min(40, int(上限))))
+            游标.execute(f"SELECT message_id,ts,recalled,id,appid,CASE WHEN OCTET_LENGTH(raw_message)<=65536 THEN raw_message ELSE '' END AS raw_message,"
+                       f"is_self,member_role,source,history_origin,history_order,{_历史作者机器人SQL} AS author_is_bot FROM `{消息记录表名}` WHERE "
+                       + " AND ".join(条件) + " ORDER BY ts DESC,id DESC LIMIT %s", tuple(参数))
+            行列表 = list(游标.fetchall() or ())
+            结果 = []
+            已修复 = False
+            for 行 in 行列表:
+                旧编号 = _规范消息ID(_行字段(行, 0, "message_id"))
+                原文 = _行字段(行, 5, "raw_message", 默认值="")
+                编号 = 恢复群消息完整编号(旧编号, 原文, 会话标识, 用户标识, appid)
+                记录ID = int(_行字段(行, 3, "id", 默认值=0) or 0)
+                if 编号 and 编号 != 旧编号:
+                    摘要 = hashlib.sha256(原文.encode()).hexdigest() if isinstance(原文, str) else ""
+                    游标.execute(f"UPDATE `{消息记录表名}` SET message_id=%s WHERE id=%s AND BINARY 会话标识=BINARY %s AND BINARY user_id=BINARY %s AND BINARY appid=BINARY %s AND BINARY 消息类型=BINARY 'group' "
+                               "AND BINARY message_id=BINARY %s AND SHA2(raw_message,256)=%s",
+                               (编号, 记录ID, 会话标识, 用户标识, appid, 旧编号, 摘要))
+                    if int(getattr(游标, "rowcount", 0) or 0) > 0:
+                        已修复 = True
+                    else:
+                        游标.execute(f"SELECT message_id FROM `{消息记录表名}` WHERE id=%s AND BINARY 会话标识=BINARY %s AND BINARY user_id=BINARY %s AND BINARY appid=BINARY %s AND BINARY 消息类型=BINARY 'group' LIMIT 1",
+                                   (记录ID, 会话标识, 用户标识, appid))
+                        if _规范消息ID(_行字段(游标.fetchone(), 0, "message_id")) != 编号:
+                            编号 = ""
+                结果.append({"message_id": 编号 or 旧编号, "_recall_id": 编号, "_recall_identity_checked": True,
+                           "ts": int(_行字段(行, 1, "ts", 默认值=0) or 0),
+                           "recalled": bool(_行字段(行, 2, "recalled", 默认值=False)), "id": 记录ID,
+                           "appid": appid, "_session": 会话标识, "chat_type": "group", "user_id": 用户标识,
+                           "is_self": bool(_行字段(行, 6, "is_self", 默认值=False)),
+                           "member_role": str(_行字段(行, 7, "member_role", 默认值="") or ""),
+                           "source": str(_行字段(行, 8, "source", 默认值="") or ""),
+                           "history_origin": str(_行字段(行, 9, "history_origin", 默认值="") or ""),
+                           "history_order": _行字段(行, 10, "history_order", 默认值=0),
+                           "is_bot": bool(_行字段(行, 11, "author_is_bot", 默认值=False))})
+            if 已修复:
+                连接.commit()
+            return 结果
+    except Exception as 异常:
+        连接.rollback()
+        logger.warning("群成员最近撤回窗口读取失败：错误类型=%s", type(异常).__name__)
+        return None
     finally:
         _关闭连接(连接)
 
