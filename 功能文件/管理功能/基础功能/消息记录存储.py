@@ -63,7 +63,7 @@ _归档保留SQL = ", ".join(
     + f", '$.{字段}'))='OBJECT' THEN JSON_OBJECT('{字段}', JSON_EXTRACT("
     + _已有媒体SQL
     + f", '$.{字段}')) ELSE JSON_OBJECT() END"
-    for 字段 in ("_lanzou_archives", "_lanzou_archive", "_quark_archives")
+    for 字段 in ("_lanzou_archives", "_lanzou_archive", "_quark_archives", "_imgbed_archives")
 )
 _消息更新SQL = (
     f"UPDATE `{消息记录表名}` SET 消息类型=%s, appid=%s, user_id=%s, nickname=%s, content=%s, "
@@ -2028,6 +2028,224 @@ def 读取引用定位窗口(
             "located_message_id": str(目标.get("message_id") or ""),
             "located_refidx": str(目标.get("refidx") or ""),
         }
+    finally:
+        _关闭连接(连接)
+
+
+def _图床归档查询条件(
+    会话标识: str, 消息ID: str, 类型: str, 媒体索引: int,
+    appid: str, history_origin: str, history_order: int,
+) -> tuple[str, tuple[Any, ...]]:
+    if (
+        not isinstance(会话标识, str) or not 会话标识.strip() or len(会话标识) > 128
+        or 类型 not in {"group", "user"} or not isinstance(appid, str)
+        or (appid and not re.fullmatch(r"[0-9]{4,32}", appid))
+        or not isinstance(媒体索引, int) or isinstance(媒体索引, bool) or not 0 <= 媒体索引 < 10000
+    ):
+        raise ValueError("invalid_imgbed_archive_scope")
+    编号 = _完整写入消息ID(消息ID)
+    条件 = "BINARY 会话标识=BINARY %s AND BINARY 消息类型=BINARY %s AND BINARY appid=BINARY %s"
+    参数: tuple[Any, ...] = (会话标识.strip(), 类型, appid)
+    if 编号:
+        return 条件 + " AND BINARY message_id=BINARY %s", (*参数, 编号)
+    if (
+        not isinstance(history_origin, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", history_origin)
+        or not isinstance(history_order, int) or isinstance(history_order, bool) or history_order <= 0
+    ):
+        raise ValueError("invalid_imgbed_archive_history")
+    return 条件 + " AND BINARY history_origin=BINARY %s AND history_order=%s", (*参数, history_origin, history_order)
+
+
+def _图床归档JSON(归档: Any) -> str:
+    """归档仅接受普通 JSON 元数据，凭据不能混入内部记录。"""
+    def 检查(值: Any, 深度: int = 0) -> None:
+        if 深度 > 16:
+            raise ValueError("invalid_imgbed_archive_json")
+        if isinstance(值, dict):
+            for 键, 内容 in 值.items():
+                if not isinstance(键, str):
+                    raise ValueError("invalid_imgbed_archive_json")
+                if 键 == "token_fingerprint":
+                    if not isinstance(内容, str) or not re.fullmatch(r"[0-9a-f]{64}", 内容):
+                        raise ValueError("invalid_imgbed_archive_fingerprint")
+                    continue
+                规范键 = unicodedata.normalize("NFKC", 键).casefold()
+                if any(词 in 规范键 for 词 in (
+                    "password", "passwd", "token", "cookie", "authorization", "secret", "credential",
+                    "access_key", "api_key", "apikey", "密码", "口令", "令牌", "票据", "密钥", "凭据",
+                )):
+                    raise ValueError("invalid_imgbed_archive_field")
+                检查(内容, 深度 + 1)
+        elif isinstance(值, list):
+            for 项目 in 值:
+                检查(项目, 深度 + 1)
+        elif 值 is not None and type(值) not in {str, int, float, bool}:
+            raise ValueError("invalid_imgbed_archive_json")
+
+    if not isinstance(归档, dict):
+        raise ValueError("invalid_imgbed_archive_json")
+    检查(归档)
+    编码 = json.dumps(归档, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
+    if len(编码.encode("utf-8")) > 64 * 1024:
+        raise ValueError("invalid_imgbed_archive_size")
+    return 编码
+
+
+def _图床归档媒体(原文: Any, 媒体索引: int) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if isinstance(原文, bytes):
+        原文 = 原文.decode("utf-8")
+    媒体 = json.loads(原文) if isinstance(原文, str) else 原文
+    if not isinstance(媒体, dict):
+        raise ValueError("invalid_imgbed_archive_media")
+    项目列表 = 媒体.get("items")
+    if isinstance(项目列表, list) and 项目列表:
+        项目 = 项目列表[媒体索引] if 媒体索引 < len(项目列表) else None
+    else:
+        项目 = 媒体 if 媒体索引 == 0 else None
+    if not isinstance(项目, dict):
+        raise ValueError("invalid_imgbed_archive_index")
+    归档列表 = 媒体.get("_imgbed_archives", {})
+    if not isinstance(归档列表, dict):
+        raise ValueError("invalid_imgbed_archive_map")
+    return 媒体, 项目, 归档列表
+
+
+def 读取消息图床归档(
+    会话标识: str, 消息ID: str, 类型: str, 媒体索引: int = 0,
+    *, appid: str = "", history_origin: str = "", history_order: int = 0,
+) -> dict[str, Any] | None:
+    """读取现有消息原索引的图床状态；读取故障不能冒充尚未上传。"""
+    连接 = None
+    try:
+        条件, 参数 = _图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
+        if not _MySQL可用() or (连接 := _打开连接()) is None:
+            raise RuntimeError("imgbed_archive_unavailable")
+        with 连接.cursor() as 游标:
+            游标.execute(f"SELECT media FROM `{消息记录表名}` WHERE {条件} LIMIT 2", 参数)
+            行列表 = 游标.fetchall()
+        if not 行列表:
+            return None
+        if len(行列表) != 1:
+            raise RuntimeError("imgbed_archive_ambiguous")
+        _, _, 归档列表 = _图床归档媒体(_行字段(行列表[0], 0, "media", 默认值="{}"), 媒体索引)
+        if str(媒体索引) not in 归档列表:
+            return None
+        return json.loads(_图床归档JSON(归档列表[str(媒体索引)]))
+    except Exception:
+        raise RuntimeError("imgbed_archive_unavailable") from None
+    finally:
+        _关闭连接(连接)
+
+
+def 更新消息图床归档(
+    会话标识: str, 消息ID: str, 类型: str, 媒体索引: int, 原归档: Any, 新归档: Any,
+    *, 原记录: Any = None, appid: str = "", history_origin: str = "", history_order: int = 0,
+    expected_source: str = "",
+) -> str:
+    """锁行 CAS 一个原附件索引，不新建消息、不覆盖其它附件或原 QQ 地址。"""
+    try:
+        条件, 参数 = _图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
+        新编码 = _图床归档JSON(新归档)
+        旧编码 = _图床归档JSON(原归档) if 原归档 is not None else None
+        if not isinstance(expected_source, str):
+            return "conflict"
+        if 原记录 is not None:
+            if not isinstance(原记录, dict):
+                return "conflict"
+            for 字段, 预期 in (("_session", 会话标识.strip()), ("chat_type", 类型), ("appid", appid)):
+                if 字段 in 原记录 and 原记录[字段] != 预期:
+                    return "conflict"
+            if 消息ID and 原记录.get("message_id") and _完整写入消息ID(原记录["message_id"]) != _完整写入消息ID(消息ID):
+                return "conflict"
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        return "conflict"
+    连接 = None
+    try:
+        with _历史清理写锁:
+            if isinstance(原记录, dict) and _记录已被清理(原记录):
+                return "missing"
+            if not _MySQL可用() or (连接 := _打开连接()) is None:
+                return "unavailable"
+            with 连接.cursor() as 游标:
+                游标.execute(
+                    f"SELECT id, media, history_origin, history_order FROM `{消息记录表名}` "
+                    f"WHERE {条件} LIMIT 2 FOR UPDATE", 参数,
+                )
+                行列表 = 游标.fetchall()
+                if len(行列表) != 1:
+                    连接.rollback()
+                    return "missing" if not 行列表 else "conflict"
+                行 = 行列表[0]
+                清理记录 = {"_session": 会话标识.strip(), "chat_type": 类型, "appid": appid,
+                        "_history_db_id": int(_行字段(行, 0, "id", 默认值=0)),
+                        "history_origin": _行字段(行, 2, "history_origin", 默认值=""),
+                        "history_order": _行字段(行, 3, "history_order", 默认值=0)}
+                if _记录已被清理(清理记录):
+                    连接.rollback()
+                    return "missing"
+                try:
+                    媒体, 项目, 归档列表 = _图床归档媒体(_行字段(行, 1, "media", 默认值="{}"), 媒体索引)
+                    当前归档 = 归档列表.get(str(媒体索引))
+                    if (旧编码 is None and str(媒体索引) in 归档列表) or (
+                        旧编码 is not None and _图床归档JSON(当前归档) != 旧编码
+                    ):
+                        连接.rollback()
+                        return "conflict"
+                    来源 = [项目[字段] for 字段 in ("src", "url", "download_url")
+                          if isinstance(项目.get(字段), str) and 项目[字段]]
+                    if expected_source and not any(
+                        expected_source == 地址 or expected_source == "sha256:" + hashlib.sha256(地址.encode("utf-8")).hexdigest()
+                        for 地址 in 来源
+                    ):
+                        连接.rollback()
+                        return "conflict"
+                except (TypeError, ValueError, UnicodeError, RecursionError):
+                    连接.rollback()
+                    return "conflict"
+                归档列表[str(媒体索引)] = json.loads(新编码)
+                媒体["_imgbed_archives"] = 归档列表
+                游标.execute(f"UPDATE `{消息记录表名}` SET media=%s WHERE id=%s",
+                        (json.dumps(媒体, ensure_ascii=False, allow_nan=False), 清理记录["_history_db_id"]))
+            连接.commit()
+            return "updated"
+    except Exception as exc:
+        if 连接 is not None:
+            try:
+                连接.rollback()
+            except Exception:
+                pass
+        logger.debug("消息记录图床归档保存失败：错误类型=%s", type(exc).__name__)
+        return "unavailable"
+    finally:
+        _关闭连接(连接)
+
+
+def 列出待处理图床消息(*, after_id: int = 0, limit: int = 200) -> dict[str, Any]:
+    """按主键分页现有图床状态，具体恢复资格由归档器判断。"""
+    连接 = None
+    try:
+        if (
+            not isinstance(after_id, int) or isinstance(after_id, bool) or after_id < 0
+            or not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0
+        ):
+            raise ValueError("invalid_imgbed_archive_cursor")
+        上限 = min(limit, 200)
+        if not _MySQL可用() or (连接 := _打开连接()) is None:
+            raise RuntimeError("imgbed_archive_unavailable")
+        with 连接.cursor() as 游标:
+            游标.execute(
+                f"SELECT {_历史查询字段SQL} FROM `{消息记录表名}` WHERE id>%s "
+                "AND JSON_VALID(media) AND JSON_TYPE(JSON_EXTRACT("
+                f"{_已有媒体SQL}, '$._imgbed_archives'))='OBJECT' "
+                "ORDER BY id ASC LIMIT %s", (after_id, 上限 + 1),
+            )
+            行列表 = 游标.fetchall()
+        记录列表 = [_行转记录(行) for 行 in 行列表[:上限]]
+        return {"records": 记录列表,
+                "next_id": 记录列表[-1]["_history_db_id"] if 记录列表 else after_id,
+                "has_more": len(行列表) > 上限}
+    except Exception:
+        raise RuntimeError("imgbed_archive_unavailable") from None
     finally:
         _关闭连接(连接)
 

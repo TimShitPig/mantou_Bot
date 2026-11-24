@@ -10,7 +10,7 @@ from typing import Any
 
 from astrbot.api import logger
 
-from . import QQ官方交互桥, 文件缓存, 权限工具, 消息日志防护, 消息记录, 机器人作用域
+from . import QQ官方交互桥, 文件缓存, 权限工具, 消息日志防护, 消息记录, 机器人作用域, 图床媒体归档
 from 功能文件.页面功能 import 帮助网页
 from 功能文件.管理功能.网盘功能 import 小说网盘
 from 功能文件.管理功能.小说功能.功能 import 小说下载任务, 小说功能开关, 平台隔离执行
@@ -194,6 +194,7 @@ async def 启动插件(上下文: Any, 配置: Any, 版本: str, 源码目录: A
         消息记录.安装消息记录(上下文, 配置)
         文件缓存.重置进程上传占用()
         小说下载任务.保护中断小说缓存()
+        图床媒体归档.启动媒体归档任务(配置)
         句柄["web"] = await 帮助网页.启动帮助网页服务(配置, 插件版本=版本)
         句柄["background"] = [
             asyncio.create_task(_后台恢复(句柄), name="插件后台恢复"),
@@ -250,6 +251,7 @@ async def _完成停止插件(句柄: dict[str, Any]) -> None:
     await _停止("accounts", _ZLibrary.停止ZLibrary账号任务)
     await _停止("stv", STV小说.停止STV后台任务)
     await _停止("legacy_chat_media", _停止旧聊天媒体归档)
+    await _停止("imgbed_media", 图床媒体归档.停止媒体归档任务)
     await _停止("web", 帮助网页.停止帮助网页服务, 句柄["web"], 保留会话=True)
     await _停止("shubl", 书耽小说.关闭书耽资源)
     await _停止("cache_daily", 文件缓存.停止每日文件缓存任务, 句柄["cache_daily"])

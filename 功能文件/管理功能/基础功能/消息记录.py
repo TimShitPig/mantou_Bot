@@ -1031,6 +1031,7 @@ def _整数时间戳(值: Any) -> int:
 def _消息媒体指纹(媒体: Any) -> str:
     if not isinstance(媒体, dict) or not 媒体:
         return ""
+    媒体 = 清理网页媒体内部字段(媒体)
     try:
         return json.dumps(媒体, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     except Exception:
@@ -1218,7 +1219,7 @@ def _合并重复消息(已有记录: dict[str, Any], 新记录: dict[str, Any])
                     当前媒体[字段] = 新媒体[字段]
             if isinstance(旧媒体.get("_lanzou_archive"), dict):
                 当前媒体["_lanzou_archive"] = 旧媒体["_lanzou_archive"]
-            for 归档字段 in ("_lanzou_archives", "_quark_archives"):
+            for 归档字段 in ("_lanzou_archives", "_quark_archives", "_imgbed_archives"):
                 新归档 = 新媒体.get(归档字段)
                 旧归档 = 旧媒体.get(归档字段)
                 归档列表 = {
@@ -2289,6 +2290,12 @@ def _消息事件载荷(记录: dict[str, Any], 会话: dict[str, Any]) -> dict[
     if isinstance(消息.get("media"), dict):
         消息["media"] = copy.deepcopy(消息["media"])
         _归一化记录媒体文字(消息)
+        try:
+            from 功能文件.管理功能.基础功能 import 图床媒体归档
+
+            消息["media"] = 图床媒体归档.构造网页媒体字段(消息["media"])
+        except Exception as exc:
+            logger.debug("消息实时图床媒体生成失败：错误类型=%s", type(exc).__name__)
         消息["media"] = 清理网页媒体内部字段(消息.get("media"))
     成员资料 = _获取消息相关成员资料(会话标识, [消息])
     return {
@@ -3306,7 +3313,7 @@ def 清理网页媒体内部字段(媒体: Any) -> Any:
         return {
             字段: 清理网页媒体内部字段(值)
             for 字段, 值 in 媒体.items()
-            if 字段 not in {"_lanzou_archive", "_lanzou_archives", "_quark_archives"}
+            if 字段 not in {"_lanzou_archive", "_lanzou_archives", "_quark_archives", "_imgbed_archives"}
         }
     if isinstance(媒体, list):
         return [清理网页媒体内部字段(值) for 值 in 媒体]
@@ -3322,7 +3329,7 @@ def _媒体项目列表(媒体: Any) -> list[dict[str, Any]]:
     项目 = {
         字段: 值
         for 字段, 值 in 媒体.items()
-        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives", "_quark_archives"}
+        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives", "_quark_archives", "_imgbed_archives"}
     }
     地址, _, 名称, _ = _附件身份字段(项目)
     return [项目] if 地址 or 名称 else []
@@ -3374,7 +3381,7 @@ def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[st
         return dict(新媒体)
     合并媒体 = dict(已有媒体)
     for 字段, 值 in 新媒体.items():
-        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives", "_quark_archives"} and 值 not in (None, ""):
+        if 字段 not in {"items", "_lanzou_archive", "_lanzou_archives", "_quark_archives", "_imgbed_archives"} and 值 not in (None, ""):
             合并媒体[字段] = 值
     项目列表 = _合并媒体项目列表(已有媒体, 新媒体)
     新索引 = _附件匹配索引(项目列表, _媒体项目列表(新媒体))
@@ -3388,7 +3395,7 @@ def _合并媒体记录(已有媒体: Any, 新媒体: dict[str, Any]) -> dict[st
             else 段
             for 段 in 新媒体["text_segments"]
         ]
-    for 归档字段 in ("_lanzou_archives", "_quark_archives"):
+    for 归档字段 in ("_lanzou_archives", "_quark_archives", "_imgbed_archives"):
         已有归档 = 已有媒体.get(归档字段)
         新归档 = 新媒体.get(归档字段)
         归档列表 = dict(已有归档) if isinstance(已有归档, dict) else {}
@@ -4399,6 +4406,7 @@ def 记录收到消息(
         if 新增记录 or 资料已补全:
             _推送消息事件(记录, 会话)
         _裁剪总缓存()
+        _安排图床消息归档(记录)
         return 记录
     except Exception as exc:
         logger.warning("消息记录缓存写入失败：错误类型=%s", type(exc).__name__)
@@ -4781,6 +4789,231 @@ async def 记录群成员系统消息(
     return 记录收到消息(消息, "group", appid=appid, 源=来源)
 
 
+def _图床热点记录(
+    会话标识: str, 消息ID: str, 类型: str, appid: str,
+    history_origin: str = "", history_order: int = 0,
+) -> dict[str, Any] | None:
+    会话 = _读取作用域会话缓存(会话标识, 类型, appid)
+    for 记录 in reversed(会话.get("messages") or []):
+        if not isinstance(记录, dict) or (
+            str(记录.get("appid") or "") != appid
+            or str(记录.get("chat_type") or "") != 类型
+            or str(记录.get("_session") or "") != 会话标识
+        ):
+            continue
+        相同编号 = bool(消息ID) and _规范消息ID(记录.get("message_id")) == 消息ID
+        相同历史 = bool(history_origin and history_order) and (
+            str(记录.get("history_origin") or "") == history_origin
+            and 记录.get("history_order") == history_order
+        )
+        if 相同编号 or 相同历史:
+            return 记录
+    return None
+
+
+async def _图床数据库操作(操作: Any, 参数: tuple[Any, ...], 关键字: dict[str, Any], 数据库快照: Any = None) -> tuple[Any, str]:
+    if _消息存储 is None:
+        raise RuntimeError("imgbed_archive_unavailable")
+    快照 = 数据库快照 if 数据库快照 is not None else _消息存储.获取数据库配置快照(当前插件配置)
+    数据库键 = _消息存储.获取数据库初始化键(快照)
+    调用 = partial(操作, *参数, **关键字)
+    任务 = asyncio.create_task(asyncio.to_thread(_消息存储.执行数据库配置快照操作, 快照, 调用))
+    try:
+        return await asyncio.shield(任务), 数据库键
+    except asyncio.CancelledError:
+        while not 任务.done():
+            try:
+                await asyncio.shield(任务)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not 任务.cancelled():
+            任务.exception()
+        raise
+
+
+async def 读取消息图床归档(
+    会话标识: str, 消息ID: str, 类型: str, 媒体索引: int = 0, *,
+    appid: str = "", history_origin: str = "", history_order: int = 0, 数据库快照: Any = None,
+) -> dict[str, Any] | None:
+    """读取确认的数据库状态；数据库失败不能伪装成尚未提交。"""
+    方法 = getattr(_消息存储, "读取消息图床归档", None)
+    if not callable(方法):
+        raise RuntimeError("imgbed_archive_unavailable")
+    结果, _ = await _图床数据库操作(
+        方法, (会话标识, 消息ID, 类型, 媒体索引),
+        {"appid": appid, "history_origin": history_origin, "history_order": history_order}, 数据库快照,
+    )
+    return copy.deepcopy(结果) if isinstance(结果, dict) else None
+
+
+async def 列出待处理图床消息(*, after_id: int = 0, limit: int = 200, 数据库快照: Any = None) -> dict[str, Any]:
+    方法 = getattr(_消息存储, "列出待处理图床消息", None)
+    if not callable(方法):
+        raise RuntimeError("imgbed_archive_unavailable")
+    结果, _ = await _图床数据库操作(方法, (), {"after_id": after_id, "limit": limit}, 数据库快照)
+    return 结果
+
+
+async def 更新消息图床归档(
+    会话标识: str, 消息ID: str, 类型: str, 媒体索引: int, 原归档: Any, 新归档: dict[str, Any], *,
+    原记录: dict[str, Any] | None = None, appid: str = "", history_origin: str = "", history_order: int = 0,
+    expected_source: str = "", 数据库快照: Any = None,
+) -> str:
+    """现有消息逐项 CAS 成功后，只更新同一数据库的热点副本。"""
+    方法 = getattr(_消息存储, "更新消息图床归档", None)
+    if not callable(方法):
+        return "unavailable"
+    try:
+        结果, 数据库键 = await _图床数据库操作(
+            方法, (会话标识, 消息ID, 类型, 媒体索引, 原归档, 新归档),
+            {"原记录": 原记录, "appid": appid, "history_origin": history_origin,
+             "history_order": history_order, "expected_source": expected_source}, 数据库快照,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("消息图床状态保存失败：错误类型=%s", type(exc).__name__)
+        return "unavailable"
+    if 结果 != "updated":
+        return 结果 if 结果 in {"conflict", "missing", "unavailable"} else "unavailable"
+    if 数据库键 != _消息存储.获取数据库初始化键(当前插件配置):
+        return "updated"
+    记录 = _图床热点记录(会话标识, _规范消息ID(消息ID), 类型, appid, history_origin, history_order)
+    if 记录 is not None and not _聊天记录已清理(记录):
+        媒体 = 记录.get("media")
+        if isinstance(媒体, dict):
+            归档表 = 媒体.setdefault("_imgbed_archives", {})
+            if isinstance(归档表, dict):
+                当前 = 归档表.get(str(媒体索引))
+                if 当前 == 原归档 or 当前 == 新归档:
+                    归档表[str(媒体索引)] = copy.deepcopy(新归档)
+                    会话 = _读取作用域会话缓存(会话标识, 类型, appid)
+                    _推送消息事件(记录, 会话)
+    return "updated"
+
+
+def _清理图床本地来源(来源: Any) -> None:
+    if not isinstance(来源, dict):
+        return
+    from 功能文件.管理功能.基础功能 import 文件缓存
+
+    缓存目录 = 文件缓存.临时缓存目录.resolve()
+    for 项 in 来源.values():
+        if not isinstance(项, dict) or not 项.get("owned") or not 项.get("path"):
+            continue
+        try:
+            路径 = Path(项["path"])
+            if 路径.resolve().parent != 缓存目录:
+                continue
+            路径.unlink(missing_ok=True)
+            文件缓存.解除临时缓存占用(路径)
+        except (OSError, TypeError, ValueError):
+            pass
+
+
+async def _准备图床本地来源(来源: Any) -> dict[int, dict[str, Any]]:
+    """异步保留发送源的独立副本，调用者删除文件不影响后台保存。"""
+    from 功能文件.管理功能.基础功能 import 文件缓存
+
+    结果: dict[int, dict[str, Any]] = {}
+    if not isinstance(来源, dict):
+        return 结果
+    try:
+        for 索引, 原项 in 来源.items():
+            if not isinstance(索引, int) or isinstance(索引, bool) or not isinstance(原项, dict):
+                continue
+            项 = dict(原项)
+            if isinstance(项.get("data"), bytes):
+                if len(项["data"]) > 800 * 1024 * 1024:
+                    结果[索引] = {**{键: 值 for 键, 值 in 项.items() if 键 not in {"path", "data"}},
+                                  "too_large": True, "size": len(项["data"])}
+                else:
+                    结果[索引] = {**项, "owned": True}
+                continue
+            if not 项.get("path"):
+                continue
+            原路径 = Path(项["path"])
+            原大小 = await asyncio.to_thread(lambda: 原路径.stat().st_size)
+            if 原大小 > 800 * 1024 * 1024:
+                结果[索引] = {**{键: 值 for 键, 值 in 项.items() if 键 not in {"path", "data"}},
+                              "too_large": True, "size": 原大小}
+                continue
+            新路径 = 文件缓存.创建临时缓存文件("mantou-imgbed-", 原路径.suffix[:12])
+            文件缓存.标记临时缓存正在使用(新路径)
+            def 复制() -> int:
+                已读 = 0
+                with 原路径.open("rb") as 输入, 新路径.open("wb") as 输出:
+                    while True:
+                        块 = 输入.read(1024 * 1024)
+                        if not 块:
+                            return 已读
+                        已读 += len(块)
+                        if 已读 > 800 * 1024 * 1024:
+                            raise ValueError("imgbed_source_too_large")
+                        输出.write(块)
+            任务 = asyncio.create_task(asyncio.to_thread(复制))
+            try:
+                大小 = await asyncio.shield(任务)
+            except BaseException as exc:
+                while not 任务.done():
+                    try:
+                        await asyncio.shield(任务)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not 任务.cancelled():
+                    任务.exception()
+                _清理图床本地来源({索引: {"path": str(新路径), "owned": True}})
+                if isinstance(exc, ValueError) and str(exc) == "imgbed_source_too_large":
+                    结果[索引] = {**{键: 值 for 键, 值 in 项.items() if 键 not in {"path", "data"}},
+                                  "too_large": True, "size": max(原大小, 800 * 1024 * 1024 + 1)}
+                    continue
+                raise
+            结果[索引] = {**项, "path": str(新路径), "size": 大小, "owned": True}
+        return 结果
+    except asyncio.CancelledError:
+        _清理图床本地来源(结果)
+        raise
+    except Exception as exc:
+        _清理图床本地来源(结果)
+        logger.debug("图床发送源保留失败：错误类型=%s", type(exc).__name__)
+        return {}
+
+
+def _安排图床消息归档(记录: Any, 本地来源: Any = None, 已上传结果: Any = None) -> bool:
+    if not isinstance(记录, dict) or not isinstance(记录.get("media"), dict):
+        _清理图床本地来源(本地来源)
+        return False
+    try:
+        from 功能文件.管理功能.基础功能 import 图床媒体归档
+
+        接收 = 图床媒体归档.安排归档消息媒体(当前插件配置, 记录, 本地来源=本地来源, 已上传结果=已上传结果)
+        if 接收:
+            return True
+    except Exception as exc:
+        logger.debug("消息图床归档入队失败：错误类型=%s", type(exc).__name__)
+    _清理图床本地来源(本地来源)
+    return False
+
+
+def _图床发送返回记录(记录: Any) -> Any:
+    if not isinstance(记录, dict):
+        return 记录
+    结果 = copy.deepcopy(记录)
+    if isinstance(结果.get("media"), dict):
+        try:
+            from 功能文件.管理功能.基础功能 import 图床媒体归档
+
+            结果["media"] = 图床媒体归档.构造网页媒体字段(结果["media"])
+        except Exception:
+            pass
+        结果["media"] = 清理网页媒体内部字段(结果["media"])
+    return 结果
+
+
 def _准备消息接收队列() -> asyncio.Queue[tuple[Any, Any, str]]:
     """热重载切换事件循环后，在旧队列已经清空时重建队列。"""
     global _消息接收队列
@@ -5113,6 +5346,7 @@ def 记录发送消息(
             _推送消息事件(重复发送记录, 会话)
             if 消息ID:
                 自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), 消息ID)] = time.time()
+            _安排图床消息归档(重复发送记录)
             return 重复发送记录
         if 消息ID:
             已有记录 = next(
@@ -5146,6 +5380,7 @@ def 记录发送消息(
                 _更新会话摘要(会话, 已有记录)
                 _推送消息事件(已有记录, 会话)
                 自己发送消息ID[(_会话作用域键(会话标识, 类型, appid), str(消息ID))] = time.time()
+                _安排图床消息归档(已有记录)
                 return 已有记录
         发送序号 += 1
         记录: dict[str, Any] = {
@@ -5214,6 +5449,7 @@ def 记录发送消息(
         # 机器人发送回复也属于一条新消息；只有设置会话已读才会清零红点。
         _推送消息事件(记录, 会话)
         _裁剪总缓存()
+        _安排图床消息归档(记录)
         return 记录
     except Exception as exc:
         logger.warning("消息记录发送缓存写入失败：错误类型=%s", type(exc).__name__)
@@ -9126,16 +9362,19 @@ async def 发送消息(
     媒体记录地址 = str(媒体URL or "").strip()
     Markdown图片地址 = 图片公开地址
     图片宽度, 图片高度 = 640, 480
+    图床本地来源: dict[int, dict[str, Any]] = {}
+    已上传图床结果: dict[int, dict[str, Any]] = {}
     if 图片字节 is not None and 类型 in ("text", "markdown"):
         try:
             from 功能文件.管理功能.基础功能 import 自建图床, 机器人作用域
 
             图片配置 = 机器人作用域.获取机器人配置(当前插件配置, appid)
             基础设置 = 图片配置.get("basic_settings", {}) if isinstance(图片配置, dict) else {}
-            上传密码 = 基础设置.get("image_host_auth_code", "") if isinstance(基础设置, dict) else ""
+            上传密码 = 基础设置.get("image_host_token", "") if isinstance(基础设置, dict) else ""
             图片结果 = await 自建图床.上传图片(图片字节, 上传密码)
             Markdown图片地址 = 图片结果["url"]
             图片宽度, 图片高度 = 图片结果["width"], 图片结果["height"]
+            已上传图床结果[0] = 图片结果
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
@@ -9149,12 +9388,22 @@ async def 发送消息(
             if getattr(异常, "stage", "") == "image_format":
                 return {"ok": False, "message": "Markdown 图片仅支持 PNG、JPEG、GIF、WebP"}
             if getattr(异常, "stage", "") == "not_configured":
-                return {"ok": False, "message": "请先在机器人基础设置中填写图床上传密码"}
+                return {"ok": False, "message": "请先在机器人基础设置中填写图床上传 Token"}
             return {"ok": False, "message": "图片上传失败，请稍后重试"}
 
     async def _保存本地发送媒体记录() -> None:
-        """记录浏览器本地媒体键，不把发送字节写入服务器硬盘。"""
-        nonlocal 图片记录地址, 媒体记录地址
+        """保留浏览器显示键，并在请求结束前交接独立归档来源。"""
+        nonlocal 图片记录地址, 媒体记录地址, 图床本地来源
+        if not 图床本地来源 and not 已上传图床结果:
+            来源: dict[str, Any] = {}
+            if 图片字节 is not None:
+                来源 = {"data": 图片字节, "original_name": 图片文件名, "media_kind": "image", "content_type": "image"}
+            elif 媒体字节 is not None or 媒体路径:
+                来源 = {"original_name": str(媒体文件名 or ""), "content_type": str(媒体内容类型 or ""),
+                      "media_kind": {2: "video", 3: "audio"}.get(int(媒体文件类型 or 4), "file")}
+                来源["data" if 媒体字节 is not None else "path"] = 媒体字节 if 媒体字节 is not None else str(媒体路径)
+            if 来源:
+                图床本地来源 = await _准备图床本地来源({0: 来源})
         地址 = str(浏览器媒体键 or "").strip()
         if not re.fullmatch(
             r"/api/message/browser-media/[A-Za-z0-9_-]{16,96}\.[A-Za-z0-9]{1,8}",
@@ -9183,6 +9432,7 @@ async def 发送消息(
         媒体记录: dict[str, Any] = {
             "type": "图片",
             "src": 图片记录地址,
+            "name": 图片文件名,
             "text": 展示文本,
         }
         if 前文本 or 后文本:
@@ -9396,7 +9646,8 @@ async def 发送消息(
                         媒体=媒体记录,
                         发送时间=_提取发送响应时间(结果),
                     )
-                    return {"ok": True, "message_id": 响应ID, "message": 记录}
+                    _安排图床消息归档(记录, 本地来源=图床本地来源, 已上传结果=已上传图床结果)
+                    return {"ok": True, "message_id": 响应ID, "message": _图床发送返回记录(记录)}
                 错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
             return {"ok": False, "message": "私聊发送失败：该用户不在互动窗口内，请先在 QQ 中与该机器人互动一次"}
@@ -9444,7 +9695,8 @@ async def 发送消息(
         媒体=媒体记录,
         发送时间=_提取发送响应时间(结果),
     )
-    return {"ok": True, "message_id": 响应ID, "message": 记录}
+    _安排图床消息归档(记录, 本地来源=图床本地来源, 已上传结果=已上传图床结果)
+    return {"ok": True, "message_id": 响应ID, "message": _图床发送返回记录(记录)}
 
 
 async def 撤回消息(
@@ -10016,27 +10268,88 @@ def _链段类型(段: Any) -> str:
     return str(getattr(类型, "value", 类型)).strip().lower()
 
 
-def _链提取媒体(消息链: Any) -> dict[str, Any] | None:
-    """记录官方组件中可用的远端媒体 URL；不触发 File.file 的同步下载属性。"""
-    附件列表: list[dict[str, Any]] = []
+def _链提取媒体及来源(消息链: Any) -> tuple[dict[str, Any] | None, dict[int, dict[str, Any]]]:
+    """按附件原顺序读取远端地址和本地来源，绝不读取 File.file 属性。"""
+    def 本地路径(值: str) -> Path:
+        from urllib.request import url2pathname
+
+        解析 = _解析网址(值)
+        if 解析.scheme.lower() != "file":
+            return Path(值)
+        主机 = 解析.netloc or ""
+        路径 = 解析.path or ""
+        if 主机 and 主机.lower() != "localhost":
+            if len(主机) == 2 and 主机[0].isalpha() and 主机[1] == ":":
+                return Path(url2pathname(主机 + 路径))
+            return Path(url2pathname("//" + 主机 + 路径))
+        路径 = url2pathname(路径)
+        if len(路径) >= 4 and 路径[0] in ("/", "\\") and 路径[1].isalpha() and 路径[2] == ":":
+            路径 = 路径[1:]
+        elif os.name != "nt" and 路径.startswith("//"):
+            路径 = "/" + 路径.lstrip("/")
+        return Path(路径)
+
+    项目: list[dict[str, Any]] = []
+    来源: dict[int, dict[str, Any]] = {}
     for 段 in _链消息段列表(消息链):
         类型 = _链段类型(段)
-        if 类型 not in {"image", "img", "video", "record", "recordmusic", "file", "files"}:
+        if 类型 not in {"image", "img", "video", "record", "recordmusic", "audio", "voice", "file", "files"}:
             continue
         数据 = _读取字段(段, "data")
         结构 = 数据 if isinstance(数据, dict) else 段
-        地址 = _读取字段(结构, "url")
-        if not str(地址 or "").startswith(("http://", "https://")):
-            # 新版 File 使用 file_，访问 file 属性会启动同步下载。
-            字段 = "file_" if 类型 in {"file", "files"} and not isinstance(结构, dict) else "file"
-            地址 = _读取字段(结构, 字段)
-        if not str(地址 or "").startswith(("http://", "https://")):
-            continue
-        默认MIME = {"image": "image", "img": "image", "video": "video",
-                    "record": "voice", "recordmusic": "voice"}.get(类型, "file")
-        附件列表.append({"url": 地址, "filename": _读取字段(结构, "name") or "",
-                         "content_type": _读取字段(结构, "content_type") or 默认MIME})
-    return _提取附件媒体({"attachments": 附件列表})
+        种类 = "image" if 类型 in {"image", "img"} else "video" if 类型 == "video" else "audio" if 类型 in {"record", "recordmusic", "audio", "voice"} else "file"
+        名称 = str(_读取字段(结构, "name") or _读取字段(结构, "file_name") or _读取字段(结构, "filename") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        MIME = str(_读取字段(结构, "content_type") or _读取字段(结构, "mime_type") or {"image": "image", "video": "video", "audio": "voice"}.get(种类, "file"))
+        URL = _读取字段(结构, "url")
+        文件字段 = "file_" if 类型 in {"file", "files"} and not isinstance(结构, dict) else "file"
+        文件源 = _读取字段(结构, 文件字段)
+        备用路径 = _读取字段(结构, "path")
+        候选列表 = [URL, 文件源, 备用路径] if isinstance(URL, str) and URL.startswith(("http://", "https://")) else [文件源, URL, 备用路径]
+        索引 = len(项目)
+        本地: dict[str, Any] = {}
+        地址 = ""
+        for 候选 in 候选列表:
+            if isinstance(候选, bytes):
+                if 候选:
+                    本地["data"] = 候选
+                    break
+                continue
+            if not isinstance(候选, (str, os.PathLike)):
+                continue
+            文本 = os.fspath(候选)
+            if not 文本:
+                continue
+            if 文本.startswith(("http://", "https://")):
+                地址 = 文本
+                break
+            if 文本.startswith("base64://") or (文本.startswith("data:") and ";base64," in 文本):
+                try:
+                    编码 = 文本[9:] if 文本.startswith("base64://") else 文本.split(",", 1)[1]
+                    内容 = base64.b64decode(编码, validate=True)
+                    if 内容:
+                        本地["data"] = 内容
+                        break
+                except (ValueError, TypeError):
+                    pass
+                continue
+            try:
+                路径 = 本地路径(文本)
+                if 路径.is_file():
+                    本地["path"] = str(路径.absolute())
+                    名称 = 名称 or 路径.name
+                    break
+            except (OSError, ValueError):
+                continue
+        名称 = 名称 or f"media-{索引 + 1}"
+        项目.append({"type": {"image": "图片", "video": "视频", "audio": "语音", "file": "文件"}[种类],
+                     "src": 地址, "name": 名称, "content_type": MIME, "text": ""})
+        if 本地:
+            来源[索引] = {**本地, "original_name": 名称, "content_type": MIME, "media_kind": 种类}
+    return _打包媒体项目(项目), 来源
+
+
+def _链提取媒体(消息链: Any) -> dict[str, Any] | None:
+    return _链提取媒体及来源(消息链)[0]
 
 
 def _链提取文本(消息链: Any) -> str:
@@ -10140,131 +10453,115 @@ def _发送挂钩原方法(发送方法: Any) -> Any:
 
 
 def _包装事件发送(发送方法: Any) -> Any:
-    """包装 QQ 官方事件发送入口，只在平台成功返回后记录消息和时间。"""
-    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 3:
+    """包装 QQ 官方事件发送，媒体源由独立副本交给后台保存。"""
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 4:
         return None
     发送方法 = _发送挂钩原方法(发送方法)
     if 发送方法 is None:
         return None
 
     async def 新发送(self: Any, stream: Any = None, **关键字: Any) -> Any:
-        会话标识 = ""
-        类型 = "user"
-        appid = ""
-        内容 = ""
+        会话标识, 类型, appid, 内容 = "", "user", "", ""
         媒体 = None
+        本地来源: dict[int, dict[str, Any]] = {}
         try:
             缓冲 = getattr(self, "send_buffer", None)
             if 缓冲 is not None:
                 会话 = getattr(self, "session", None)
                 会话标识 = _会话标识兜底(会话, getattr(self, "message_obj", None))
-                消息类型 = getattr(会话, "message_type", None)
-                类型 = "group" if "GROUP" in str(消息类型).upper() else "user"
-                try:
-                    appid = _平台实例appid(self)
-                except Exception:
-                    pass
+                类型 = "group" if "GROUP" in str(getattr(会话, "message_type", None)).upper() else "user"
+                appid = _平台实例appid(self)
                 内容 = _链提取文本(缓冲)
-                媒体 = _链提取媒体(缓冲)
+                媒体, 原来源 = _链提取媒体及来源(缓冲)
+                本地来源 = await _准备图床本地来源(原来源)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.debug("消息记录事件发送参数提取失败：错误类型=%s", type(exc).__name__)
-        结果 = 发送方法(self, stream, **关键字)
-        if asyncio.iscoroutine(结果):
-            结果 = await 结果
+        try:
+            结果 = 发送方法(self, stream, **关键字)
+            if asyncio.iscoroutine(结果):
+                结果 = await 结果
+        except BaseException:
+            _清理图床本地来源(本地来源)
+            raise
         try:
             原始消息 = getattr(self, "message_obj", None)
-            原始消息ID = str(
-                getattr(原始消息, "message_id", None)
-                or getattr(原始消息, "id", None)
-                or ""
-            ).strip()
-            if 会话标识 and 内容 and (结果 is not None or 原始消息ID):
-                记录发送消息(
-                    会话标识,
-                    类型,
-                    内容,
-                    appid,
-                    消息ID=_提取发送响应消息ID(结果),
-                    自身REFIDX=_提取发送响应REFIDX(结果),
-                    发送者昵称="机器人",
-                    来源="bot_event",
-                    媒体=媒体,
+            原始消息ID = str(getattr(原始消息, "message_id", None) or getattr(原始消息, "id", None) or "").strip()
+            if 会话标识 and (内容 or 媒体) and (结果 is not None or 原始消息ID):
+                记录 = 记录发送消息(
+                    会话标识, 类型, 内容 or "（媒体消息）", appid,
+                    消息ID=_提取发送响应消息ID(结果), 自身REFIDX=_提取发送响应REFIDX(结果),
+                    发送者昵称="机器人", 来源="bot_event", 媒体=媒体,
                     发送时间=_提取发送响应时间(结果),
                 )
+                if _安排图床消息归档(记录, 本地来源=本地来源):
+                    本地来源 = {}
         except Exception as exc:
             logger.warning("消息记录事件发送成功后记录失败：错误类型=%s", type(exc).__name__)
+        finally:
+            _清理图床本地来源(本地来源)
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
-    setattr(新发送, "__mantou_record_version__", 3)
+    setattr(新发送, "__mantou_record_version__", 4)
     setattr(新发送, "__mantou_record_original__", 发送方法)
     return 新发送
 
 
 def _包装发送方法(发送方法: Any) -> Any:
-    """包装主动会话发送，只在适配器确认发送成功后记录。"""
-    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 3:
+    """包装主动会话发送，QQ 原调用只提交一次。"""
+    if 发送方法 is None or getattr(发送方法, "__mantou_record_version__", 0) == 4:
         return None
     发送方法 = _发送挂钩原方法(发送方法)
     if 发送方法 is None:
         return None
 
     async def 新发送(self: Any, session: Any, message_chain: Any) -> Any:
-        appid = ""
-        会话标识 = ""
-        类型 = "user"
-        内容 = ""
-        发送前消息ID = ""
+        appid, 会话标识, 类型, 内容, 发送前消息ID = "", "", "user", "", ""
         媒体 = None
+        本地来源: dict[int, dict[str, Any]] = {}
         try:
             appid = _平台实例appid(self)
             会话标识 = _会话标识兜底(session)
-            消息类型 = str(getattr(session, "message_type", "") or "")
-            类型 = "group" if "GROUP" in 消息类型.upper() else "user"
+            类型 = "group" if "GROUP" in str(getattr(session, "message_type", "")).upper() else "user"
             内容 = _链提取文本(message_chain)
-            媒体 = _链提取媒体(message_chain)
+            媒体, 原来源 = _链提取媒体及来源(message_chain)
+            本地来源 = await _准备图床本地来源(原来源)
             发送前消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.debug("消息记录主动发送参数提取失败：错误类型=%s", type(exc).__name__)
-        结果 = 发送方法(self, session, message_chain)
-        if asyncio.iscoroutine(结果):
-            结果 = await 结果
+        try:
+            结果 = 发送方法(self, session, message_chain)
+            if asyncio.iscoroutine(结果):
+                结果 = await 结果
+        except BaseException:
+            _清理图床本地来源(本地来源)
+            raise
         try:
             发送后消息ID = str((getattr(self, "_session_last_message_id", {}) or {}).get(会话标识) or "")
             响应消息ID = _提取发送响应消息ID(结果)
             if 响应消息ID and 响应消息ID == 发送前消息ID:
                 响应消息ID = ""
-            消息ID = 响应消息ID or (
-                发送后消息ID
-                if 发送后消息ID and 发送后消息ID != 发送前消息ID
-                else ""
-            )
-            # send_by_session 按官方适配器约定返回 None。群聊没有旧消息 ID 时，
-            # 适配器可能实际跳过发送，因此只允许已有会话或明确开启主动发送的群
-            # 在无 ID 时落一条记录；私聊发送成功返回后始终保留本地记录。
-            允许无ID记录 = (
-                类型 == "user"
-                or bool(发送前消息ID)
-                or bool(getattr(self, "_allow_group_proactive_send", False))
-            )
-            if 会话标识 and 内容 and (消息ID or 允许无ID记录):
-                记录发送消息(
-                    会话标识,
-                    类型,
-                    内容,
-                    appid,
-                    消息ID=消息ID,
-                    自身REFIDX=_提取发送响应REFIDX(结果),
-                    发送者昵称="机器人",
-                    来源="bot_session",
-                    媒体=媒体,
+            消息ID = 响应消息ID or (发送后消息ID if 发送后消息ID and 发送后消息ID != 发送前消息ID else "")
+            允许无ID记录 = 类型 == "user" or bool(发送前消息ID) or bool(getattr(self, "_allow_group_proactive_send", False))
+            if 会话标识 and (内容 or 媒体) and (消息ID or 允许无ID记录):
+                记录 = 记录发送消息(
+                    会话标识, 类型, 内容 or "（媒体消息）", appid, 消息ID=消息ID,
+                    自身REFIDX=_提取发送响应REFIDX(结果), 发送者昵称="机器人", 来源="bot_session", 媒体=媒体,
                 )
+                if _安排图床消息归档(记录, 本地来源=本地来源):
+                    本地来源 = {}
         except Exception as exc:
             logger.warning("消息记录主动发送成功后记录失败：错误类型=%s", type(exc).__name__)
+        finally:
+            _清理图床本地来源(本地来源)
         return 结果
 
     setattr(新发送, "__mantou_record_after_send__", True)
-    setattr(新发送, "__mantou_record_version__", 3)
+    setattr(新发送, "__mantou_record_version__", 4)
     setattr(新发送, "__mantou_record_original__", 发送方法)
     return 新发送
 
@@ -10291,7 +10588,7 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(适配器类, "send_by_session", 新发送)
                 已包装 += 1
-            if getattr(getattr(适配器类, "send_by_session", None), "__mantou_record_version__", 0) == 3:
+            if getattr(getattr(适配器类, "send_by_session", None), "__mantou_record_version__", 0) == 4:
                 已就绪 += 1
         事件类 = getattr(事件模块, "QQOfficialMessageEvent", None)
         if 事件类 is not None:
@@ -10300,7 +10597,7 @@ def _安装消息发送挂钩() -> bool:
             if 新发送 is not None:
                 setattr(事件类, "_post_send", 新发送)
                 已包装 += 1
-            if getattr(getattr(事件类, "_post_send", None), "__mantou_record_version__", 0) == 3:
+            if getattr(getattr(事件类, "_post_send", None), "__mantou_record_version__", 0) == 4:
                 已就绪 += 1
     except Exception as 异常:
         logger.warning("消息记录发送挂钩（适配器/事件）加载失败：错误类型=%s", type(异常).__name__)

@@ -6130,6 +6130,14 @@
         });
       };
       const msgMediaItemUrl = (item) => String(item?.src || item?.url || item?.download_url || '').trim();
+      const msgImgbedUrl = (value) => {
+        try {
+          const url = new URL(String(value || ''));
+          return url.protocol === 'https:' && url.hostname === 'mantou-imgbed.pages.dev'
+            && !url.username && !url.password && !url.search && !url.hash
+            && (!url.port || url.port === '443') && url.pathname.startsWith('/file/') ? url.href : '';
+        } catch (_) { return ''; }
+      };
       const msgMediaItemName = (item) => String(item?.name || item?.filename || item?.file_name || '').trim();
       const msgMediaItemKind = (item) => {
         const type = String(item?.type || item?.media_type || '').trim().toLowerCase();
@@ -6146,7 +6154,7 @@
         const source = Array.isArray(media) ? media : (Array.isArray(media.items) && media.items.length ? media.items : [media]);
         return source.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => {
           const result = {...item};
-          ['items','_lanzou_archive','_lanzou_archives','_quark_archives'].forEach((key) => delete result[key]);
+          ['items','_lanzou_archive','_lanzou_archives','_quark_archives','_imgbed_archives'].forEach((key) => delete result[key]);
           return result;
         }).filter((item) => Boolean(msgMediaItemUrl(item) || msgMediaItemName(item) || msgMediaItemKind(item)));
       };
@@ -6185,6 +6193,9 @@
           Object.entries(item).forEach(([key, value]) => {
             if (msgMediaHasValue(value) && !msgMediaHasValue(items[index][key])) items[index][key] = value;
           });
+          if (typeof item.imgbed_status === 'string') items[index].imgbed_status = item.imgbed_status;
+          const savedUrl = msgImgbedUrl(item.imgbed_url);
+          if (savedUrl) items[index].imgbed_url = savedUrl;
         });
         return {items, incomingIndexes};
       };
@@ -6205,13 +6216,13 @@
           });
         }
         // The first item remains the existing slot zero; later metadata cannot replace its URL.
-        ['type','media_type','src','url','download_url','name','filename','file_name','content_type','mime_type','size','width','height','optimistic_data'].forEach((key) => {
+        ['type','media_type','src','url','download_url','name','filename','file_name','content_type','mime_type','size','width','height','optimistic_data','imgbed_url','imgbed_status'].forEach((key) => {
           if (Object.prototype.hasOwnProperty.call(items[0], key)) result[key] = items[0][key];
           else delete result[key];
         });
         if (items.length > 1 || Array.isArray(existing.items) || Array.isArray(incoming?.items)) result.items = items;
         else delete result.items;
-        ['_lanzou_archive','_lanzou_archives','_quark_archives'].forEach((key) => delete result[key]);
+        ['_lanzou_archive','_lanzou_archives','_quark_archives','_imgbed_archives'].forEach((key) => delete result[key]);
         return result;
       };
       const mergeMsgRealtimeMessage = (existing, incoming) => {
@@ -6784,14 +6795,14 @@
           }
         }));
       };
-      const messageMediaProxyRevision = '6.1.109';
+      const messageMediaProxyRevision = 'imgbed-2';
       const mediaProxyUrl = (src, mode = 'image', name = '', appid = consoleAppid) => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
         try {
           const host = new URL(direct).hostname.toLowerCase().replace(/\.$/, '');
           const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qlogo.cn', 'qq.com.cn', 'qq.com'];
-          const shouldProxy = allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+          const shouldProxy = Boolean(msgImgbedUrl(direct)) || allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
           if (!shouldProxy) return direct;
           const query = new URLSearchParams({src: direct, mode: ['image', 'avatar'].includes(mode) ? mode : 'file'});
           if (/^\d{4,32}$/.test(String(appid || ''))) query.set('appid', appid);
@@ -6826,7 +6837,9 @@
           if (!item || typeof item !== 'object') return '';
           const type = String(item.type || item.media_type || '文件');
           const contentType = String(item.content_type || item.mime_type || '').toLowerCase();
-           const directSrc = item.src || item.url || item.download_url;
+           const directSrc = msgImgbedUrl(item.imgbed_url) || item.src || item.url || item.download_url;
+           const saveLabel = ({queued:'保存中', downloading:'保存中', downloaded:'保存中', uploading:'保存中', submitting:'保存中', stored:'已保存到图床', unknown:'保存结果待确认', failed:'保存失败', waiting_source:'等待附件地址', waiting_token:'待配置图床'})[String(item.imgbed_status || '')] || '';
+           const saveBadge = saveLabel ? `<small class="msg-media-save-status">${esc(saveLabel)}</small>` : '';
            const inlineSrc = String(item.optimistic_data || '').match(/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i) && String(item.optimistic_data).length <= 12000000 ? String(item.optimistic_data) : '';
            const src = safeMediaUrl(directSrc) || inlineSrc;
           const browserKey = browserMediaMarker(src);
@@ -6840,16 +6853,16 @@
             const preview = mediaProxyUrl(src, 'image');
             const loading = preload ? 'eager' : 'lazy';
             const priority = preload ? 'high' : 'low';
-            return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="${loading}" fetchpriority="${priority}" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button></div>`;
+            return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-image-media"><button class="msg-image-link" type="button" aria-label="放大图片"><img src="${esc(preview || src)}" alt="图片" loading="${loading}" fetchpriority="${priority}" decoding="async" draggable="true" referrerpolicy="no-referrer" data-lightbox="${esc(preview || src)}" data-media-direct="${esc(src)}" data-media-proxied="${preview && preview !== src ? '1' : '0'}" data-media-img></button>${saveBadge}</div>`;
           }
           if (isVideo && src) {
             if (browserKey) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" data-browser-media-key="${esc(browserKey)}"></video></div>`;
             const videoUrl = mediaProxyUrl(src, 'file');
-            return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video></div>`;
+            return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video>${saveBadge}</div>`;
           }
           const name = mediaFileName(item, src);
           const size = mediaSizeLabel(item.size);
-          const meta = [['文件', 'file'].includes(typeLower) ? '' : type, size].filter(Boolean).join(' · ') || type || '附件';
+          const meta = [['文件', 'file'].includes(typeLower) ? '' : type, size, saveLabel].filter(Boolean).join(' · ') || type || '附件';
           if (!src) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-file-card is-unavailable"><span class="msg-file-icon">${renderMessageFileIcon(type)}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)} · 未提供下载地址</small></span></div>`;
           const download = name ? ` download="${esc(name)}"` : '';
           if (browserKey) return `<a data-msg-media-key="${mediaKey}" class="msg-media msg-file-card" data-browser-media-key="${esc(browserKey)}"${download}><span class="msg-file-icon">${renderMessageFileIcon(type)}</span><span class="msg-file-info"><strong>${esc(name)}</strong><small>${esc(meta)}</small></span><span class="msg-file-action">下载<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg></span></a>`;

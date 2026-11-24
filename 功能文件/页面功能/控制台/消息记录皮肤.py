@@ -4,6 +4,7 @@ from ..公共样式.新版外观样式 import 新版外观样式
 from .总览外观 import 总览外观
 
 消息记录皮肤 = """
+    .msg-media-save-status { display:block; margin-top:4px; color:var(--muted); font-size:11px; }
     /* 与后台共用表面及控件色；气泡保留独立色值，手机 QQ 配色在下方覆盖。 */
     :root body.messages-workspace {
       --bg:var(--studio-canvas);

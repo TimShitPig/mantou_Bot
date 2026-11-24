@@ -357,12 +357,12 @@ async def _后台刷新消息列表(
         消息列表后台刷新.discard(缓存键)
 
 插件配置字段定义: dict[str, dict[str, Any]] = {
-    "image_host_auth_code": {
+    "image_host_token": {
         "category": "basic_settings",
-        "label": "自建图床上传密码",
+        "label": "自建图床 API Token",
         "kind": "secret",
         "secret": True,
-        "hint": "固定图床 https://mantou-imgbed.pages.dev；只写入、不回显，留空保留原值。",
+        "hint": "填写图床生成的 imgbed_ 开头 Token；只写入、不回显，留空保留原值。",
     },
     "group_file_cleanup_admin_qq": {
         "category": "basic_settings",
@@ -762,11 +762,9 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
             return False
         raise ValueError("布尔配置值无效")
     if 定义.get("secret"):
-        if 字段名 == "image_host_auth_code":
-            if not isinstance(值, str) or not 值 or len(值) > 256:
-                raise ValueError("图床上传密码无效")
-            if any(字符.isspace() or ord(字符) < 32 or 127 <= ord(字符) <= 159 for 字符 in 值):
-                raise ValueError("图床上传密码不能含空白或控制字符")
+        if 字段名 == "image_host_token":
+            if not isinstance(值, str) or not re.fullmatch(r"imgbed_[A-Za-z0-9_-]{16,256}", 值):
+                raise ValueError("图床 Token 格式无效")
             return 值
         文本 = str(值 or "").strip()
         if not 文本 and not 定义.get("allow_empty"):
@@ -1476,6 +1474,9 @@ async def _读取消息发送请求(request: web.Request) -> tuple[dict[str, Any
 def _允许媒体地址(地址: Any) -> bool:
     """只允许 QQ 媒体域名进入代理，避免把控制台变成开放 URL 转发器。"""
     try:
+        from .图床媒体代理 import 是图床文件地址
+        if 是图床文件地址(地址):
+            return True
         解析 = urlsplit(str(地址 or "").strip())
         主机 = str(解析.hostname or "").rstrip(".").lower()
         if 解析.scheme.lower() not in {"http", "https"} or not 主机:
@@ -1663,6 +1664,9 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if _媒体代理失败缓存命中(缓存键):
         return _媒体代理失败响应(模式, 已过期=True)
     文件名 = _媒体文件名(request.query.get("name"))
+    from .图床媒体代理 import 是图床文件地址, 处理图床媒体
+    if 是图床文件地址(地址):
+        return await 处理图床媒体(request, 地址, 模式, 文件名)
     阶段 = "session"
     已发送 = 0
     上游状态: int | None = None
@@ -2496,7 +2500,7 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
                 raise ValueError("配置字段不支持")
             if 定义.get("secret") and (
                 原值 is None or isinstance(原值, str) and (
-                    原值 == "" if 字段名 == "image_host_auth_code" else not 原值.strip()
+                    原值 == "" if 字段名 == "image_host_token" else not 原值.strip()
                 )
             ):
                 continue
@@ -4324,6 +4328,8 @@ async def _处理消息历史(request: web.Request) -> web.Response:
             return _控制台错误(404, "原消息未保存或已删除")
         for 消息项 in 结果.get("messages") or []:
             if isinstance(消息项, dict) and isinstance(消息项.get("media"), dict):
+                from 功能文件.管理功能.基础功能 import 图床媒体归档
+                消息项["media"] = 图床媒体归档.构造网页媒体字段(消息项["media"])
                 消息项["media"] = 消息记录.清理网页媒体内部字段(消息项["media"])
         try:
             消息记录.安排待处理群信息刷新()
