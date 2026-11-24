@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 from typing import Any
-from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit
 
 import aiohttp
 
@@ -145,6 +145,14 @@ def _获取小说列表内容(配置: Any = None) -> str:
 )
 
 
+教程图片地址 = {
+    "share-link.jpg": "https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514788714_share-link.jpg",
+    "search-command.png": "https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514811013_search-command.png",
+    "select-result.png": "https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514819945_select-result.png",
+    "open-book.jpg": "https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514829399_open-book.jpg",
+}
+
+
 def _获取使用教程内容(配置: Any = None) -> str:
     from 功能文件.页面功能 import 帮助网页后端
 
@@ -153,9 +161,6 @@ def _获取使用教程内容(配置: Any = None) -> str:
         图片宽度 = max(160, min(1080, int(宽度值))) if not isinstance(宽度值, bool) else 480
     except (TypeError, ValueError, OverflowError):
         图片宽度 = 480
-    基础地址 = 帮助网页后端.获取帮助网页地址(配置)
-    地址 = urlsplit(基础地址)
-    图片路径 = quote(地址.path.rstrip("/"), safe="/%") + "/tutorial-images/"
     步骤 = (
         "**1. 直接下载**：把小说的分享链接直接发送到群里即可。",
         "**2. 找书**：发送 `找xx`，xx 可以是书名或作者。**一定要加“找”，不加不会进行找书。**",
@@ -165,12 +170,9 @@ def _获取使用教程内容(配置: Any = None) -> str:
     内容 = ["## 使用教程"]
     for 序号, (说明, (文件名, 原宽, 原高)) in enumerate(zip(步骤, 教程图片规格), 1):
         内容.append(说明)
-        if 基础地址:
-            图片地址 = urlunsplit((地址.scheme, 地址.netloc, 图片路径 + 文件名, "", ""))
-            图片高度 = round(原高 * 图片宽度 / 原宽)
-            内容.append(f"![步骤{序号}示例 #{图片宽度}px #{图片高度}px]({图片地址})")
-    if not 基础地址:
-        logger.warning("使用教程配图未生成：reason=web_service_unavailable")
+        图片地址 = 教程图片地址[文件名]
+        图片高度 = round(原高 * 图片宽度 / 原宽)
+        内容.append(f"![步骤{序号}示例 #{图片宽度}px #{图片高度}px]({图片地址})")
     return "\n\n".join(内容)
 
 

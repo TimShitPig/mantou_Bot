@@ -9372,40 +9372,31 @@ async def 发送消息(
     媒体记录地址 = str(媒体URL or "").strip()
     Markdown图片地址 = 图片公开地址
     图片宽度, 图片高度 = 640, 480
-    图片素材 = None
     if 图片字节 is not None and 类型 in ("text", "markdown"):
         try:
-            from 功能文件.管理功能.基础功能 import QQ官方素材
+            from 功能文件.管理功能.基础功能 import 自建图床, 机器人作用域
 
-            图片素材 = await QQ官方素材.上传Markdown图片(_http, appid, 图片字节)
-            Markdown图片地址 = 图片素材["url"]
-            图片宽度, 图片高度 = 图片素材["width"], 图片素材["height"]
+            图片配置 = 机器人作用域.获取机器人配置(当前插件配置, appid)
+            基础设置 = 图片配置.get("basic_settings", {}) if isinstance(图片配置, dict) else {}
+            上传密码 = 基础设置.get("image_host_auth_code", "") if isinstance(基础设置, dict) else ""
+            图片结果 = await 自建图床.上传图片(图片字节, 上传密码)
+            Markdown图片地址 = 图片结果["url"]
+            图片宽度, 图片高度 = 图片结果["width"], 图片结果["height"]
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
             logger.warning(
-                "QQ官方 Markdown 图片预上传失败：阶段=%s，HTTP状态=%s，业务码=%s，错误类型=%s",
+                "自建图床图片上传失败：阶段=%s，HTTP状态=%s，错误类型=%s",
                 getattr(异常, "stage", "request"), getattr(异常, "status", None) or "none",
-                getattr(异常, "code", None) or "none", type(异常).__name__,
+                type(异常).__name__,
             )
             if getattr(异常, "stage", "") == "image_size":
                 return {"ok": False, "message": "Markdown 图片须在 10MB 以内"}
             if getattr(异常, "stage", "") == "image_format":
                 return {"ok": False, "message": "Markdown 图片仅支持 PNG、JPEG、GIF、WebP"}
-            if getattr(异常, "code", None) == 40035007:
-                return {"ok": False, "message": "图片素材空间已满，请清理后重试"}
-            return {"ok": False, "message": "图片预上传失败，请稍后重试"}
-
-    async def _释放已发送图片素材() -> None:
-        if not 图片素材:
-            return
-        try:
-            await QQ官方素材.删除已发送素材(_http, appid, 图片素材["image_id"])
-        except asyncio.CancelledError:
-            raise
-        except Exception as 异常:
-            logger.warning("QQ官方已发送图片素材释放失败：HTTP状态=%s，业务码=%s，错误类型=%s",
-                           getattr(异常, "status", None) or "none", getattr(异常, "code", None) or "none", type(异常).__name__)
+            if getattr(异常, "stage", "") == "not_configured":
+                return {"ok": False, "message": "请先在机器人基础设置中填写图床上传密码"}
+            return {"ok": False, "message": "图片上传失败，请稍后重试"}
 
     async def _保存本地发送媒体记录() -> None:
         """记录浏览器本地媒体键，不把发送字节写入服务器硬盘。"""
@@ -9466,7 +9457,7 @@ async def 发送消息(
             "text": _媒体文字去占位(内容, 图片占位标记),
         }
 
-    # 本地图片用官方素材引用，网络图片继续支持原 Markdown 地址。
+    # 本地图片先取得自建图床外链，网络图片保留传入的公开地址。
     图文内容 = (
         _构造Markdown图文内容(
             内容,
@@ -9484,8 +9475,7 @@ async def 发送消息(
         消息体["msg_type"] = 2
         消息体.pop("content", None)
         消息体["markdown"] = {"content": 图文内容}
-        if not Markdown图片地址.startswith("qqbot-media://"):
-            消息体["markdown"]["force_verify_image_resource"] = True
+        消息体["markdown"]["force_verify_image_resource"] = True
     else:
         # 没有公网图片地址时，下面改用官方富媒体消息。
         if (图片字节 is not None or 图片公开地址) and 类型 == "markdown":
@@ -9652,7 +9642,6 @@ async def 发送消息(
                         媒体=媒体记录,
                         发送时间=_提取发送响应时间(结果),
                     )
-                    await _释放已发送图片素材()
                     return {"ok": True, "message_id": 响应ID, "message": 记录}
                 错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
@@ -9701,8 +9690,6 @@ async def 发送消息(
         媒体=媒体记录,
         发送时间=_提取发送响应时间(结果),
     )
-    if 响应ID:
-        await _释放已发送图片素材()
     return {"ok": True, "message_id": 响应ID, "message": 记录}
 
 

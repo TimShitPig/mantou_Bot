@@ -3,6 +3,13 @@
     "description": "基础配置",
     "type": "object",
     "items": {
+      "image_host_auth_code": {
+        "description": "自建图床上传密码",
+        "type": "string",
+        "hint": "用于固定图床 https://mantou-imgbed.pages.dev 的上传鉴权。只写入、不回显；留空保留原值。",
+        "default": "",
+        "invisible": true
+      },
       "group_file_cleanup_admin_qq": {
         "description": "插件管理员 QQ 白名单",
         "type": "list",
@@ -18,7 +25,7 @@
       "welcome_tutorial_image_width": {
         "description": "使用教程图片宽度（像素）",
         "type": "int",
-        "hint": "欢迎菜单的使用教程在同一条消息中发送四步文字和四张配图。宽度默认 480，可设置 160 至 1080，图片高度按原图比例自动计算；不修改图片原始字节。配图复用帮助网页外网地址，请保持该地址可从公网访问。",
+        "hint": "欢迎菜单的使用教程在同一条消息中发送四步文字和四张配图。宽度默认 480，可设置 160 至 1080，图片高度按原图比例自动计算；配图使用自建图床固定链接，保留原始字节，无需配置帮助网页公网地址。",
         "default": 480,
         "invisible": true
       },
@@ -246,7 +253,7 @@
   "bot_profiles": {
     "description": "各机器人独立业务配置",
     "type": "dict",
-    "hint": "由插件控制台按认证 AppID 保存各机器人的管理员白名单、网盘 Cookie 与上传目录、教程图片宽度及账号创建配置。请选择机器人后在其页面编辑；数据库连接、网页监听与登录账号仍为共用基础设施。小说开关、网盘账号与其他运行状态按 AppID 独立保存在 MySQL。首次使用各自继承旧业务设置一次，此后互不覆盖。",
+    "hint": "由插件控制台按认证 AppID 保存各机器人的管理员白名单、图床上传密码、网盘 Cookie 与上传目录、教程图片宽度及账号创建配置。请选择机器人后在其页面编辑；数据库连接、网页监听与登录账号仍为共用基础设施。小说开关、网盘账号与其他运行状态按 AppID 独立保存在 MySQL。首次使用各自继承旧业务设置一次，此后互不覆盖。",
     "default": {},
     "invisible": true
   }

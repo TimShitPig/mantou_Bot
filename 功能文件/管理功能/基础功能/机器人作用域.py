@@ -22,6 +22,7 @@ _机器人配置写入代次 = globals().get("_机器人配置写入代次") or 
 )
 机器人独立帮助字段 = {"welcome_tutorial_image_width"}
 机器人业务字段分类 = {
+    "image_host_auth_code": "basic_settings",
     "group_file_cleanup_admin_qq": "basic_settings",
     "uc_pan_cookie": "uc_pan_settings", "uc_pan_upload_dir": "uc_pan_settings",
     "quark_pan_cookie": "quark_pan_settings", "quark_pan_upload_dir": "quark_pan_settings",
