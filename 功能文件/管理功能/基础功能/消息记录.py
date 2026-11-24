@@ -1681,13 +1681,20 @@ async def _写入消息持久化子批次(
             if not await 等待消息记录恢复():
                 return False, "数据库初始化未就绪"
             async with _数据库写入锁:
-                结果 = await _异步执行消息记录同步(
-                    _执行消息持久化批次,
-                    子批次,
-                    _消息存储.获取数据库配置快照(当前插件配置)
-                    if _消息存储 is not None and _消息数据库已配置() else None,
-                )
+                快照 = _消息存储.获取数据库配置快照(当前插件配置) if _消息存储 is not None and _消息数据库已配置() else None
+                if 快照 is not None:
+                    结果 = await _异步执行消息记录同步(_消息存储.执行数据库配置快照操作, 快照, _执行消息持久化批次, 子批次, 快照)
+                else:
+                    结果 = await _异步执行消息记录同步(_执行消息持久化批次, 子批次, None)
             if 结果 is not False:
+                if 项目类型 == "message" and 快照 is not None:
+                    try:
+                        from 功能文件.管理功能.基础功能 import 图床媒体归档
+
+                        图床媒体归档.通知消息已持久化([数据 for _, 数据 in 子批次 if isinstance(数据, dict)], 快照)
+                    except Exception as 通知异常:
+                        # 提交已经确认，通知失败只依赖归档短轮询补查，绝不能重放 INSERT。
+                        logger.debug("图床消息落库通知延后补查：错误类型=%s", type(通知异常).__name__)
                 return True, ""
             最后错误类型 = "写入返回失败"
         except asyncio.CancelledError:

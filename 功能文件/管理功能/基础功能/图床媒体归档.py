@@ -192,8 +192,11 @@ def _配置快照(配置: Any, appid: str) -> tuple[dict[str, Any], str]:
     from . import 消息记录存储, 机器人作用域
     配置 = 机器人作用域.获取机器人配置(配置, appid)
     快照 = 消息记录存储.获取数据库配置快照(配置)
-    键 = hashlib.sha256(json.dumps(快照, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
-    return 快照, 键
+    return 快照, _数据库快照键(快照)
+
+
+def _数据库快照键(快照: Any) -> str:
+    return hashlib.sha256(json.dumps(快照, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
 def _配置令牌(参数: dict[str, Any]) -> str:
@@ -220,6 +223,65 @@ def _任务键(记录: dict[str, Any], 数据库键: str, 索引: int) -> tuple[
     else:
         return None
     return 数据库键, appid, 类型, 会话, *身份, 索引
+
+
+def 通知消息已持久化(记录列表: Any, 数据库快照: Any) -> int:
+    """提交确认只唤醒同一数据库和消息身份的未提交等待项，不创建消息或归档任务。"""
+    if _停止中 or not isinstance(数据库快照, dict) or not isinstance(记录列表, (list, tuple)):
+        return 0
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return 0
+    数据库键 = _数据库快照键(数据库快照)
+    身份 = set()
+    消息身份 = set()
+    for 记录 in 记录列表:
+        if isinstance(记录, dict) and (键 := _任务键(记录, 数据库键, 0)) is not None:
+            身份.add(键[:-1])
+            编号 = 记录.get("message_id")
+            if isinstance(编号, str) and 编号 and len(编号) <= 512:
+                消息身份.add((*键[:4], "message", 编号))
+    已唤醒 = 0
+    for 键, 参数 in list(_待归档.items()):
+        记录 = 参数.get("record") or {}
+        编号 = 记录.get("message_id")
+        相同消息 = isinstance(编号, str) and bool(编号) and (*键[:4], "message", 编号) in 消息身份
+        if ((键[:-1] not in 身份 and not 相同消息) or 参数.get("done") or 参数.get("gone") or 参数.get("terminal")
+                or _提交未知(参数.get("archive")) or _提交未知(参数.get("pending_state"))):
+            continue
+        # 在途登记可能已读到 missing、尚未进入 except；代次让它收尾时也能看到这次提交。
+        参数["message_commit_generation"] = int(参数.get("message_commit_generation") or 0) + 1
+        if 参数.get("last_error") == "message_waiting":
+            参数["retry_at"] = 0.0
+            已唤醒 += 1
+    if 已唤醒:
+        _排空队列()
+    return 已唤醒
+
+
+def _等待消息落库(参数: dict[str, Any], 开始代次: int) -> None:
+    """正常异步 INSERT 等待保持安静；短轮询弥补丢通知，持续等待才受控提示。"""
+    当前 = asyncio.get_running_loop().time()
+    开始 = 参数.setdefault("message_wait_started", 当前)
+    次数 = int(参数.get("message_wait_attempts") or 0)
+    间隔 = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0)[min(次数, 5)]
+    参数["message_wait_attempts"] = min(次数 + 1, 6)
+    参数["last_error"] = "message_waiting"
+    if 当前 - 开始 >= 60:
+        间隔 = 5.0
+        上次提示 = float(参数.get("message_wait_reported") or 开始)
+        if 当前 - 上次提示 >= 60:
+            logger.warning("自建图床仍在等待消息落库：阶段=message_waiting，媒体序号=%s，等待秒数=%s", 参数["index"], int(当前 - 开始))
+            参数["message_wait_reported"] = 当前
+    参数["retry_at"] = 当前 if int(参数.get("message_commit_generation") or 0) > 开始代次 else 当前 + 间隔
+
+
+def _清除消息落库等待(参数: dict[str, Any]) -> None:
+    for 字段 in ("message_wait_started", "message_wait_attempts", "message_wait_reported"):
+        参数.pop(字段, None)
+    if 参数.get("last_error") == "message_waiting":
+        参数.pop("last_error", None)
 
 
 def _每项参数(值: Any, 索引: int) -> dict[str, Any] | None:
@@ -435,6 +497,7 @@ async def _保存状态(参数: dict[str, Any], 新归档: dict[str, Any]) -> No
     except Exception as 异常:
         raise 图床归档错误("state_unavailable", **_存储错误字段(异常, "update")) from None
     if 状态 == "updated":
+        _清除消息落库等待(参数)
         参数["archive"] = copy.deepcopy(新归档)
         参数["record"].setdefault("media", {}).setdefault("_imgbed_archives", {})[str(参数["index"])] = copy.deepcopy(新归档)
         return
@@ -735,6 +798,7 @@ async def _执行归档(参数: dict[str, Any]) -> None:
 
 async def _处理任务(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
     from . import 机器人作用域
+    落库代次 = int(参数.get("message_commit_generation") or 0)
     try:
         _, 当前数据库键 = _配置快照(参数["config_source"], 参数["appid"])
         if 当前数据库键 != 参数["database_key"]:
@@ -747,6 +811,9 @@ async def _处理任务(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
     except Exception as 异常:
         阶段 = getattr(异常, "stage", "archive")
         归档 = 参数.get("archive")
+        if 阶段 == "message_waiting" and not _提交未知(归档) and not _提交未知(参数.get("pending_state")):
+            _等待消息落库(参数, 落库代次)
+            return
         if (str(阶段).startswith("source_") and 参数.get("source_attempt")
                 and 参数["source_attempt"] != _源地址(参数["item"]) and not _提交未知(归档)):
             参数.pop("terminal", None)
@@ -819,6 +886,7 @@ def _任务完成(任务: asyncio.Task[Any]) -> None:
 async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
     """先独立落待保存状态；大文件不阻塞后续元数据登记。"""
     from . import 机器人作用域
+    落库代次 = int(参数.get("message_commit_generation") or 0)
     try:
         with 机器人作用域.绑定机器人作用域(参数["appid"]):
             已有 = await _读取状态(参数)
@@ -883,8 +951,11 @@ async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
     except Exception as 异常:
         if 参数.get("gone"):
             return
-        参数["retry_at"] = asyncio.get_running_loop().time() + 30.0
         阶段 = getattr(异常, "stage", "state_unavailable")
+        if 阶段 == "message_waiting" and not _提交未知(参数.get("archive")) and not _提交未知(参数.get("pending_state")):
+            _等待消息落库(参数, 落库代次)
+            return
+        参数["retry_at"] = asyncio.get_running_loop().time() + 30.0
         if 参数.get("last_error") != 阶段:
             详情 = _存储错误字段(异常)
             logger.warning(

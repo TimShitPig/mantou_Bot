@@ -256,7 +256,7 @@ _列最大长度: dict[str, int] = {
 
 _数据库配置引用: dict[str, Any] = globals().get("_数据库配置引用", {})
 _数据库线程配置 = globals().get("_数据库线程配置") or threading.local()
-_消息表结构版本 = 7
+_消息表结构版本 = 8
 _已初始化消息结构: set[str] = globals().get("_已初始化消息结构", set())
 _消息结构初始化锁 = globals().get("_消息结构初始化锁") or threading.RLock()
 _历史清理边界: dict[tuple[str, str, str, str], dict[str, Any]] = globals().get("_历史清理边界") or {}
@@ -516,6 +516,20 @@ def _兼容旧群资料(游标: Any) -> None:
     )
 
 
+def _确保历史身份索引(游标: Any) -> None:
+    """为稳定历史身份补非唯一索引；重复历史仍由归档查询拒绝。"""
+    游标.execute(
+        "SELECT COUNT(*) AS c FROM information_schema.STATISTICS "
+        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s",
+        (消息记录表名, "idx_msg_records_history_identity"),
+    )
+    if int(_行字段(游标.fetchone(), 0, "c", "COUNT(*)", 默认值=0) or 0) == 0:
+        游标.execute(
+            f"ALTER TABLE `{消息记录表名}` ADD KEY idx_msg_records_history_identity "
+            "(history_origin, history_order)"
+        )
+
+
 def _初始化数据库结构() -> bool:
     """建消息记录、群资料与元数据表；返回是否成功。"""
     if not _MySQL可用():
@@ -562,6 +576,7 @@ def _初始化数据库结构() -> bool:
                     KEY idx_msg_records_session_message (会话标识(64), message_id(64)),
                     KEY idx_msg_records_scope_refidx (会话标识(32), 消息类型, appid(16), refidx(64), id),
                     KEY idx_msg_records_message (message_id),
+                    KEY idx_msg_records_history_identity (history_origin, history_order),
                     KEY idx_msg_records_user_id (user_id(64), 消息类型, is_self, id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
@@ -578,6 +593,8 @@ def _初始化数据库结构() -> bool:
                 )
                 if int(_行字段(游标.fetchone(), 0, "c", 默认值=0) or 0) == 0:
                     游标.execute(f"ALTER TABLE `{消息记录表名}` ADD COLUMN `{字段}` {定义}")
+            初始化阶段 = "检查索引_idx_msg_records_history_identity"
+            _确保历史身份索引(游标)
             初始化阶段 = "建用户资料表"
             游标.execute(
                 f"""
@@ -2110,23 +2127,49 @@ def _图床归档查询条件(
     编号 = _完整写入消息ID(消息ID)
     字段 = ["会话标识", "消息类型", "appid"]
     参数: tuple[Any, ...] = (会话标识.strip(), 类型, appid)
-    if 编号:
+    历史有效 = (
+        isinstance(history_origin, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", history_origin)
+        and type(history_order) is int and history_order > 0
+    )
+    if 历史有效:
+        字段.append("history_origin")
+        参数 = (*参数, history_origin)
+        后缀, 后缀参数 = " AND history_order=%s", (history_order,)
+    elif 编号:
         字段.append("message_id")
         参数 = (*参数, 编号)
         后缀, 后缀参数 = "", ()
     else:
-        if (
-            not isinstance(history_origin, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", history_origin)
-            or not isinstance(history_order, int) or isinstance(history_order, bool) or history_order <= 0
-        ):
-            raise ValueError("invalid_imgbed_archive_history")
-        字段.append("history_origin")
-        参数 = (*参数, history_origin)
-        后缀, 后缀参数 = " AND history_order=%s", (history_order,)
+        raise ValueError("invalid_imgbed_archive_history")
     # 普通等值保留复合索引入口，再按原字节核对，兼容不区分大小写的库排序规则。
     条件 = " AND ".join(f"{列}=%s" for 列 in 字段) + 后缀
     精确条件 = " AND ".join(f"BINARY {列}=BINARY %s" for 列 in 字段)
     return 条件 + " AND " + 精确条件, (*参数, *后缀参数, *参数)
+
+
+def _图床归档查询候选(
+    会话标识: str, 消息ID: str, 类型: str, 媒体索引: int,
+    appid: str, history_origin: str, history_order: int,
+) -> list[tuple[str, tuple[Any, ...]]]:
+    首选 = _图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
+    候选 = [首选]
+    if "history_order=%s" in 首选[0] and _完整写入消息ID(消息ID):
+        # 重启后重复投递可带新接收序号；只有历史身份完全缺行才查独立的官方消息身份。
+        候选.append(_图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, "", 0))
+    return 候选
+
+
+def _读取图床匹配行(游标: Any, 字段: str, 查询候选: list[tuple[str, tuple[Any, ...]]], *, 锁定: bool = False) -> Any:
+    for 条件, 参数 in 查询候选:
+        游标.execute(
+            f"SELECT {字段} FROM `{消息记录表名}` WHERE {条件} LIMIT 2" + (" FOR UPDATE" if 锁定 else ""),
+            参数,
+        )
+        行列表 = 游标.fetchall()
+        if 行列表:
+            # 多行或已匹配后的状态/来源冲突由调用方拒绝，不能转查另一身份。
+            return 行列表
+    return ()
 
 
 def _图床归档JSON(归档: Any) -> str:
@@ -2192,7 +2235,7 @@ def 读取消息图床归档(
     阶段 = "config"
     错误 = None
     try:
-        条件, 参数 = _图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
+        查询候选 = _图床归档查询候选(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
         if not _MySQL可用():
             raise 图床状态存储错误("read", 阶段, "configuration")
         阶段 = "connect"
@@ -2200,8 +2243,7 @@ def 读取消息图床归档(
             raise 图床状态存储错误("read", 阶段, "unavailable")
         阶段 = "query"
         with 连接.cursor() as 游标:
-            游标.execute(f"SELECT media FROM `{消息记录表名}` WHERE {条件} LIMIT 2", 参数)
-            行列表 = 游标.fetchall()
+            行列表 = _读取图床匹配行(游标, "media", 查询候选)
         if not 行列表:
             return None
         if len(行列表) != 1:
@@ -2225,7 +2267,7 @@ def 更新消息图床归档(
 ) -> str:
     """锁行 CAS 一个原附件索引，不新建消息、不覆盖其它附件或原 QQ 地址。"""
     try:
-        条件, 参数 = _图床归档查询条件(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
+        查询候选 = _图床归档查询候选(会话标识, 消息ID, 类型, 媒体索引, appid, history_origin, history_order)
         新编码 = _图床归档JSON(新归档)
         旧编码 = _图床归档JSON(原归档) if 原归档 is not None else None
         if not isinstance(expected_source, str):
@@ -2254,11 +2296,7 @@ def 更新消息图床归档(
                 raise 图床状态存储错误("update", 阶段, "unavailable")
             阶段 = "query"
             with 连接.cursor() as 游标:
-                游标.execute(
-                    f"SELECT id, media, history_origin, history_order FROM `{消息记录表名}` "
-                    f"WHERE {条件} LIMIT 2 FOR UPDATE", 参数,
-                )
-                行列表 = 游标.fetchall()
+                行列表 = _读取图床匹配行(游标, "id, media, history_origin, history_order", 查询候选, 锁定=True)
                 if len(行列表) != 1:
                     连接.rollback()
                     return "missing" if not 行列表 else "conflict"
