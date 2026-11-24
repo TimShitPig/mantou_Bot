@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 import weakref
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -107,13 +108,14 @@ async def 上传图片(数据: bytes, 上传密码: str) -> dict[str, Any]:
             ) as 客户端:
                 if hasattr(客户端, "_retry_connection"):
                     客户端._retry_connection = False
+                上传日期 = datetime.now()
                 async with 客户端.post(
                     图床地址 + "/upload", data=表单,
                     headers={"authCode": 上传密码}, allow_redirects=False,
                     params={"uploadChannel": "telegram", "channelName": "自建图床",
                             "serverCompress": "false", "autoRetry": "false",
                             "returnFormat": "full", "responseFormat": "object",
-                            "uploadFolder": "mantou-bot/images"},
+                            "uploadFolder": f"mantou-bot/images/{上传日期.year}年{上传日期.month}月{上传日期.day}日"},
                 ) as 响应:
                     return await _读取上传结果(响应)
 
