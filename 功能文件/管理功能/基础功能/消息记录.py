@@ -9185,9 +9185,7 @@ def _构造Markdown图文内容(
 ) -> str:
     """按 QQ 官方 Markdown 图片语法拼接一条图文消息。"""
     文本 = str(内容 or "").strip()
-    原地址 = str(图片地址 or "")
-    地址 = (原地址 if re.fullmatch(r"qqbot-media://image/v1/[A-Za-z0-9._~%+=/-]+", 原地址)
-          else _规范化公网图片地址(原地址))
+    地址 = _规范化公网图片地址(图片地址)
     前文本 = str(图片前文本 or "").strip()
     后文本 = str(图片后文本 or "").strip()
     占位标记 = str(图片占位标记 or "\ufffc")
