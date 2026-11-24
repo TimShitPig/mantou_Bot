@@ -3,17 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import re
-import weakref
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
-from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, TCPConnector, web
 
 
 _单次范围 = 4 * 1024 * 1024
-_下载额度 = globals().get("_下载额度")
-if _下载额度 is None:
-    _下载额度 = weakref.WeakKeyDictionary()
+# 热重载丢弃旧版下载额度，不将旧限额带入新的请求。
+globals().pop("_下载额度", None)
 
 
 def 是图床文件地址(值: Any) -> bool:
@@ -87,14 +85,11 @@ async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文
     头列表 = request.headers.getall("Range", [])
     if len(头列表) > 1:
         return web.Response(status=416, text="媒体范围无效")
-    额度 = _下载额度.get(asyncio.get_running_loop())
-    if 额度 is None:
-        额度 = asyncio.Semaphore(8)
-        _下载额度[asyncio.get_running_loop()] = 额度
     响应 = None
     try:
-        async with 额度, ClientSession(
+        async with ClientSession(
             timeout=ClientTimeout(total=None, connect=20, sock_read=90),
+            connector=TCPConnector(limit=0),
             cookie_jar=DummyCookieJar(), trust_env=False, auto_decompress=False,
         ) as 客户端:
             if hasattr(客户端, "_retry_connection"):

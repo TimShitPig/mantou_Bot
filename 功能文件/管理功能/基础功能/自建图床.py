@@ -11,7 +11,6 @@ import os
 import re
 import stat
 import time
-import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,9 +25,8 @@ from PIL import Image
 _响应上限 = 64 * 1024
 _图片类型 = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "WEBP": "image/webp"}
 _媒体目录 = {"image": "图片", "file": "文件", "audio": "音频", "video": "视频"}
-_上传额度 = globals().get("_上传额度")
-if _上传额度 is None:
-    _上传额度 = weakref.WeakKeyDictionary()
+# 热重载丢弃旧版额度，独立文件不再共享固定并发限额。
+globals().pop("_上传额度", None)
 
 
 class 图床错误(RuntimeError):
@@ -309,89 +307,84 @@ async def _上传源(打开源, 上传Token, 名称, 种类, 类型, 提交前=N
     名称 = _规范文件名(名称)
     if not isinstance(种类, str) or 种类 not in _媒体目录:
         raise 图床错误("media_kind")
-    循环 = asyncio.get_running_loop()
-    额度 = _上传额度.get(循环)
-    if 额度 is None:
-        额度 = asyncio.Semaphore(8)
-        _上传额度[循环] = 额度
-    async with 额度:
-        try:
-            with 打开源() as 文件:
-                大小, 摘要, 初始状态 = await _在线程执行(_文件摘要, 文件)
-                状态 = _准备进度(进度, {
-                    "size": 大小, "sha256": 摘要, "original_name": 名称,
-                    "content_type": 类型, "media_kind": 种类,
-                }, 上传Token)
-                if 状态["stage"] == "completed":
-                    return _上传结果(状态)
-                参数 = {
-                    "uploadChannel": "telegram", "channelName": "自建图床",
-                    "serverCompress": "false", "autoRetry": "false", "uploadNameType": "default",
-                    "returnFormat": "full", "responseFormat": "object", "uploadFolder": 状态["folder"],
+    try:
+        with 打开源() as 文件:
+            大小, 摘要, 初始状态 = await _在线程执行(_文件摘要, 文件)
+            状态 = _准备进度(进度, {
+                "size": 大小, "sha256": 摘要, "original_name": 名称,
+                "content_type": 类型, "media_kind": 种类,
+            }, 上传Token)
+            if 状态["stage"] == "completed":
+                return _上传结果(状态)
+            参数 = {
+                "uploadChannel": "telegram", "channelName": "自建图床",
+                "serverCompress": "false", "autoRetry": "false", "uploadNameType": "default",
+                "returnFormat": "full", "responseFormat": "object", "uploadFolder": 状态["folder"],
+            }
+
+            def 确认完成(结果, 待确认):
+                return {
+                    **待确认, "stage": "completed", "submitted": False, "confirmed": True,
+                    "next_chunk": 待确认["total_chunks"], "result_url": _结果地址(结果),
+                    "uploaded_at": time.time(),
                 }
 
-                def 确认完成(结果, 待确认):
-                    return {
-                        **待确认, "stage": "completed", "submitted": False, "confirmed": True,
-                        "next_chunk": 待确认["total_chunks"], "result_url": _结果地址(结果),
-                        "uploaded_at": time.time(),
-                    }
-
-                async with aiohttp.ClientSession(
-                    timeout=aiohttp.ClientTimeout(total=240, connect=15, sock_read=210),
-                    cookie_jar=aiohttp.DummyCookieJar(), trust_env=False,
-                ) as 客户端:
-                    if hasattr(客户端, "_retry_connection"):
-                        客户端._retry_connection = False
-                    if 大小 <= 上传分片大小:
-                        块 = await _在线程执行(_读取文件块, 文件, 0, 大小, 初始状态)
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=240, connect=15, sock_read=210),
+                connector=aiohttp.TCPConnector(limit=0),
+                cookie_jar=aiohttp.DummyCookieJar(), trust_env=False,
+            ) as 客户端:
+                if hasattr(客户端, "_retry_connection"):
+                    客户端._retry_connection = False
+                if 大小 <= 上传分片大小:
+                    块 = await _在线程执行(_读取文件块, 文件, 0, 大小, 初始状态)
+                    状态 = await _请求(
+                        客户端, 上传Token, 参数, _表单({}, 块, 名称, 类型), 状态, "single",
+                        提交前, 进度回调, 确认完成,
+                    )
+                else:
+                    字段 = {"originalFileName": 名称, "originalFileType": 类型, "totalChunks": 状态["total_chunks"]}
+                    if not 状态["upload_id"]:
+                        def 确认初始化(结果, 待确认):
+                            if not isinstance(结果, dict) or 结果.get("success") is not True:
+                                raise 图床错误("response_fields", 200)
+                            编号 = 结果.get("uploadId")
+                            if not isinstance(编号, str) or len(编号) > 100 or not re.fullmatch(r"upload_[0-9]+_[a-z0-9]+", 编号):
+                                raise 图床错误("response_fields", 200)
+                            return {**待确认, "stage": "initialized", "submitted": False, "confirmed": True, "upload_id": 编号}
                         状态 = await _请求(
-                            客户端, 上传Token, 参数, _表单({}, 块, 名称, 类型), 状态, "single",
-                            提交前, 进度回调, 确认完成,
+                            客户端, 上传Token, {**参数, "initChunked": "true"}, _表单(字段),
+                            状态, "init", 提交前, 进度回调, 确认初始化,
                         )
-                    else:
-                        字段 = {"originalFileName": 名称, "originalFileType": 类型, "totalChunks": 状态["total_chunks"]}
-                        if not 状态["upload_id"]:
-                            def 确认初始化(结果, 待确认):
-                                if not isinstance(结果, dict) or 结果.get("success") is not True:
-                                    raise 图床错误("response_fields", 200)
-                                编号 = 结果.get("uploadId")
-                                if not isinstance(编号, str) or len(编号) > 100 or not re.fullmatch(r"upload_[0-9]+_[a-z0-9]+", 编号):
-                                    raise 图床错误("response_fields", 200)
-                                return {**待确认, "stage": "initialized", "submitted": False, "confirmed": True, "upload_id": 编号}
-                            状态 = await _请求(
-                                客户端, 上传Token, {**参数, "initChunked": "true"}, _表单(字段),
-                                状态, "init", 提交前, 进度回调, 确认初始化,
-                            )
-                        for 序号 in range(状态["next_chunk"], 状态["total_chunks"]):
-                            偏移 = 序号 * 上传分片大小
-                            块 = await _在线程执行(_读取文件块, 文件, 偏移, min(上传分片大小, 大小 - 偏移), 初始状态)
-                            def 确认分片(结果, 待确认, 当前序号=序号):
-                                if (
-                                    not isinstance(结果, dict) or 结果.get("success") is not True
-                                    or 结果.get("uploadId") != 待确认["upload_id"]
-                                    or type(结果.get("chunkIndex")) is not int or 结果["chunkIndex"] != 当前序号
-                                ):
-                                    raise 图床错误("response_fields", 200)
-                                return {**待确认, "stage": "uploading", "submitted": False, "confirmed": True, "next_chunk": 当前序号 + 1}
-                            状态 = await _请求(
-                                客户端, 上传Token, {**参数, "chunked": "true"},
-                                _表单({**字段, "uploadId": 状态["upload_id"], "chunkIndex": 序号}, 块, 名称, "application/octet-stream"),
-                                状态, "chunk", 提交前, 进度回调, 确认分片,
-                            )
-                        # 上游 Telegram 分片内部仍有固定重试；客户端不追加重试或重发未知提交。
+                    for 序号 in range(状态["next_chunk"], 状态["total_chunks"]):
+                        偏移 = 序号 * 上传分片大小
+                        块 = await _在线程执行(_读取文件块, 文件, 偏移, min(上传分片大小, 大小 - 偏移), 初始状态)
+                        def 确认分片(结果, 待确认, 当前序号=序号):
+                            if (
+                                not isinstance(结果, dict) or 结果.get("success") is not True
+                                or 结果.get("uploadId") != 待确认["upload_id"]
+                                or type(结果.get("chunkIndex")) is not int or 结果["chunkIndex"] != 当前序号
+                            ):
+                                raise 图床错误("response_fields", 200)
+                            return {**待确认, "stage": "uploading", "submitted": False, "confirmed": True, "next_chunk": 当前序号 + 1}
                         状态 = await _请求(
-                            客户端, 上传Token, {**参数, "chunked": "true", "merge": "true"},
-                            _表单({**字段, "uploadId": 状态["upload_id"]}), 状态, "merge",
-                            提交前, 进度回调, 确认完成,
+                            客户端, 上传Token, {**参数, "chunked": "true"},
+                            _表单({**字段, "uploadId": 状态["upload_id"], "chunkIndex": 序号}, 块, 名称, "application/octet-stream"),
+                            状态, "chunk", 提交前, 进度回调, 确认分片,
                         )
-                return _上传结果(状态)
-        except asyncio.CancelledError:
-            raise
-        except 图床错误:
-            raise
-        except (OSError, ValueError, TypeError):
-            raise 图床错误("file_read") from None
+                    # 上游 Telegram 分片内部仍有固定重试；客户端不追加重试或重发未知提交。
+                    状态 = await _请求(
+                        客户端, 上传Token, {**参数, "chunked": "true", "merge": "true"},
+                        _表单({**字段, "uploadId": 状态["upload_id"]}), 状态, "merge",
+                        提交前, 进度回调, 确认完成,
+                    )
+            return _上传结果(状态)
+    except asyncio.CancelledError:
+        raise
+    except 图床错误:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise 图床错误("file_read") from None
 
 
 async def 上传文件(

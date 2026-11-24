@@ -253,8 +253,8 @@ async def 获取媒体代理会话() -> ClientSession:
     if _媒体代理会话 is None or _媒体代理会话.closed:
         _媒体代理会话 = ClientSession(
             connector=TCPConnector(
-                limit=32,
-                limit_per_host=8,
+                limit=0,
+                limit_per_host=0,
                 ttl_dns_cache=300,
                 enable_cleanup_closed=True,
             ),

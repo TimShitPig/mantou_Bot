@@ -25,7 +25,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 
-最大并发数 = 8
 _QQ主机后缀 = ("qq.com", "qq.com.cn", "qpic.cn", "qlogo.cn")
 _图床主机 = "mantou-imgbed.pages.dev"
 _进度字段 = frozenset({
@@ -46,9 +45,9 @@ _当前配置 = globals().get("_当前配置")
 _登记任务 = globals().get("_登记任务")
 if not isinstance(_登记任务, set):
     _登记任务 = set()
-_登记额度 = globals().get("_登记额度")
-if not isinstance(_登记额度, asyncio.Semaphore):
-    _登记额度 = asyncio.Semaphore(8)
+# 热重载时清除旧版本保存的并发额度，不让旧信号量继续约束新任务。
+globals().pop("_登记额度", None)
+globals().pop("最大并发数", None)
 _恢复任务 = globals().get("_恢复任务")
 
 
@@ -526,7 +525,7 @@ async def _下载已验证来源(地址: str, 路径: Path, *, 允许公网: boo
     解析器 = _公网解析器()
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, connect=20, sock_read=90),
-                                         connector=aiohttp.TCPConnector(resolver=解析器, use_dns_cache=False),
+                                         connector=aiohttp.TCPConnector(limit=0, resolver=解析器, use_dns_cache=False),
                                          cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as 会话:
             return await _下载会话来源(会话, 地址, 路径, 允许公网=允许公网)
     finally:
@@ -779,68 +778,67 @@ def _任务完成(任务: asyncio.Task[Any]) -> None:
 
 
 async def _登记单项(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
-    """先落待保存状态，再占用媒体传输额度；大文件不阻塞后续元数据登记。"""
+    """先独立落待保存状态；大文件不阻塞后续元数据登记。"""
     from . import 机器人作用域
     try:
-        async with _登记额度:
-            with 机器人作用域.绑定机器人作用域(参数["appid"]):
-                已有 = await _读取状态(参数)
-                if isinstance(已有, dict):
-                    参数["archive"] = 已有
-                归档 = 参数.get("archive")
-                _解除旧大小拒绝(参数)
-                已完成 = _已完成进度结果(归档.get("progress")) if isinstance(归档, dict) else None
-                if 已完成:
-                    参数["confirmed_result"] = 已完成
-                if isinstance(归档, dict) and 归档.get("status") in {"saved", "stored"} and _图床地址(归档.get("url")):
-                    参数["done"] = True
-                    return
-                if 参数.get("confirmed_result"):
-                    # 完成进度恢复后仍需接管已完整的专属原件，保存成功时才能释放。
-                    # 显式传入的本地描述保留其 owned 属性，不接管用户原路径。
-                    if (isinstance(归档, dict) and 归档.get("local_complete") is True
-                            and not isinstance(参数.get("local"), dict)):
-                        from . import 文件缓存
-                        路径 = _安全缓存路径(归档.get("local_path"))
-                        专属目录 = (文件缓存.临时缓存目录 / "图床待保存").resolve()
-                        if (路径 is not None and 路径.parent == 专属目录
-                                and await asyncio.to_thread(路径.is_file)):
-                            文件缓存.标记临时缓存正在使用(路径)
-                            参数["local"] = {"path": str(路径), "owned": True, "complete": True}
-                    参数["registered"] = True
-                    return
-                if isinstance(归档, dict):
+        with 机器人作用域.绑定机器人作用域(参数["appid"]):
+            已有 = await _读取状态(参数)
+            if isinstance(已有, dict):
+                参数["archive"] = 已有
+            归档 = 参数.get("archive")
+            _解除旧大小拒绝(参数)
+            已完成 = _已完成进度结果(归档.get("progress")) if isinstance(归档, dict) else None
+            if 已完成:
+                参数["confirmed_result"] = 已完成
+            if isinstance(归档, dict) and 归档.get("status") in {"saved", "stored"} and _图床地址(归档.get("url")):
+                参数["done"] = True
+                return
+            if 参数.get("confirmed_result"):
+                # 完成进度恢复后仍需接管已完整的专属原件，保存成功时才能释放。
+                # 显式传入的本地描述保留其 owned 属性，不接管用户原路径。
+                if (isinstance(归档, dict) and 归档.get("local_complete") is True
+                        and not isinstance(参数.get("local"), dict)):
+                    from . import 文件缓存
                     路径 = _安全缓存路径(归档.get("local_path"))
-                    if 路径 is not None and await asyncio.to_thread(路径.is_file):
-                        from . import 文件缓存
+                    专属目录 = (文件缓存.临时缓存目录 / "图床待保存").resolve()
+                    if (路径 is not None and 路径.parent == 专属目录
+                            and await asyncio.to_thread(路径.is_file)):
                         文件缓存.标记临时缓存正在使用(路径)
-                        参数.setdefault("local", {"path": str(路径), "owned": True,
-                                                   "complete": 归档.get("local_complete") is True,
-                                                   "remote": 归档.get("local_complete") is not True})
-                if _提交未知(归档) and not 参数.get("confirmed_result"):
-                    参数["terminal"] = True
-                    参数["registered"] = True
-                    return
-                if _旧大小拒绝仍需保护(归档):
-                    参数["terminal"] = True
-                    参数["registered"] = True
-                    return
-                if (isinstance(归档, dict) and 归档.get("error_stage") == "source_expired"
-                        and 归档.get("source_fingerprint") == hashlib.sha256(_源地址(参数["item"]).encode()).hexdigest()
-                        and not 参数.get("confirmed_result") and not (参数.get("local") or {}).get("complete")):
-                    参数["terminal"] = True
-                    参数["registered"] = True
-                    return
-                字段 = {}
-                _本地来源去旧大小标记(参数)
-                if isinstance(参数.get("local"), dict) and 参数["local"].get("complete", True):
-                    路径 = await _准备本地文件(参数)
-                    字段.update(local_path=str(路径), local_complete=True)
-                状态 = "queued" if _源地址(参数["item"]).startswith("https://") or 参数.get("local") or 参数.get("confirmed_result") else "waiting_source"
-                await _保存状态(参数, _新状态(参数, 状态, **字段))
+                        参数["local"] = {"path": str(路径), "owned": True, "complete": True}
                 参数["registered"] = True
-                if 状态 == "waiting_source":
-                    参数["terminal"] = True
+                return
+            if isinstance(归档, dict):
+                路径 = _安全缓存路径(归档.get("local_path"))
+                if 路径 is not None and await asyncio.to_thread(路径.is_file):
+                    from . import 文件缓存
+                    文件缓存.标记临时缓存正在使用(路径)
+                    参数.setdefault("local", {"path": str(路径), "owned": True,
+                                               "complete": 归档.get("local_complete") is True,
+                                               "remote": 归档.get("local_complete") is not True})
+            if _提交未知(归档) and not 参数.get("confirmed_result"):
+                参数["terminal"] = True
+                参数["registered"] = True
+                return
+            if _旧大小拒绝仍需保护(归档):
+                参数["terminal"] = True
+                参数["registered"] = True
+                return
+            if (isinstance(归档, dict) and 归档.get("error_stage") == "source_expired"
+                    and 归档.get("source_fingerprint") == hashlib.sha256(_源地址(参数["item"]).encode()).hexdigest()
+                    and not 参数.get("confirmed_result") and not (参数.get("local") or {}).get("complete")):
+                参数["terminal"] = True
+                参数["registered"] = True
+                return
+            字段 = {}
+            _本地来源去旧大小标记(参数)
+            if isinstance(参数.get("local"), dict) and 参数["local"].get("complete", True):
+                路径 = await _准备本地文件(参数)
+                字段.update(local_path=str(路径), local_complete=True)
+            状态 = "queued" if _源地址(参数["item"]).startswith("https://") or 参数.get("local") or 参数.get("confirmed_result") else "waiting_source"
+            await _保存状态(参数, _新状态(参数, 状态, **字段))
+            参数["registered"] = True
+            if 状态 == "waiting_source":
+                参数["terminal"] = True
     except asyncio.CancelledError:
         raise
     except Exception as 异常:
@@ -890,13 +888,11 @@ def _排空队列() -> None:
             _登记任务.add(任务)
             任务.add_done_callback(_登记完成)
             continue
-        if len(_归档任务) >= 最大并发数:
-            continue
         任务 = asyncio.create_task(_处理任务(键, 参数), name="自建图床媒体保存")
         参数["task"] = 任务
         _归档任务.add(任务)
         任务.add_done_callback(_任务完成)
-    if 最早 is not None and len(_归档任务) < 最大并发数:
+    if 最早 is not None:
         _唤醒 = 循环.call_at(最早, _排空队列)
 
 
@@ -909,7 +905,7 @@ def 启动媒体归档任务(配置: Any) -> None:
         _解除旧大小拒绝(参数)
         if 参数.get("last_error") in {"not_configured", "state_unavailable", "state_conflict", "message_waiting"} and not _提交未知(参数.get("archive")):
             参数.pop("terminal", None)
-        参数["retry_at"] = 0.0
+            参数["retry_at"] = 0.0
     _排空队列()
     if _恢复任务 is None or _恢复任务.done():
         _恢复任务 = asyncio.create_task(_恢复待处理任务(配置), name="自建图床任务恢复")
