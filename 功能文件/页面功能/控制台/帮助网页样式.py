@@ -274,6 +274,16 @@
      .config-field small,.secret-hint,.config-message,.qq-auth-message { color:var(--muted); font-size:10px; line-height:1.55; }
      .config-actions { display:flex; align-items:center; gap:12px; }
      .config-actions .primary-button { min-height:38px; }
+    .shaoniandream-login > summary,.shaoniandream-import > summary { cursor:pointer; font-size:12px; font-weight:650; color:var(--ink); }
+    .shaoniandream-session-status { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:14px; }
+    .shaoniandream-status { display:inline-flex; padding:3px 9px; border-radius:999px; background:var(--panel); color:var(--muted); font-size:11px; }
+    .shaoniandream-status.configured { background:var(--mint); color:var(--mint-ink); }
+    .shaoniandream-session-status small,.shaoniandream-login-hint,.shaoniandream-import p { color:var(--muted); font-size:11px; line-height:1.7; }
+    .shaoniandream-login-hint { margin:10px 0 14px; }
+    .shaoniandream-login .config-actions { flex-wrap:wrap; gap:10px 12px; margin-top:16px; }
+    .shaoniandream-import { grid-column:1 / -1; min-width:0; margin-top:18px; padding-top:15px; border-top:1px solid var(--line); }
+    .shaoniandream-import p { margin:10px 0 12px; }
+
      .config-message.ok,.qq-auth-message.ok { color:var(--mint-ink); }
      .config-message.error,.qq-auth-message.error { color:var(--danger); }
      .account-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:12px; }

@@ -380,10 +380,20 @@
         const state = shaoniandreamLoginState;
         state.generation += 1; state.abort?.abort(); state.abort = null; state.busy = false;
         document.querySelectorAll('[data-shaoniandream-phone], [data-shaoniandream-password]').forEach((input) => { input.value = ''; input.disabled = false; });
-        document.querySelectorAll('[data-shaoniandream-submit]').forEach((button) => { button.disabled = false; button.textContent = '登录'; });
+        document.querySelectorAll('[data-shaoniandream-submit]').forEach((button) => { button.disabled = false; button.textContent = '登录并保存'; });
         document.querySelectorAll('[data-shaoniandream-message]').forEach((message) => { message.textContent = ''; message.className = 'config-message'; });
       };
-      const renderShaoniandreamLogin = (editable) => editable ? `<details data-shaoniandream-login open><summary>手机号登录</summary><div class="config-fields"><div class="config-field"><label for="shaoniandream-phone">手机号</label><input id="shaoniandream-phone" data-shaoniandream-phone type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="手机号"></div><div class="config-field"><label for="shaoniandream-password">密码</label><input id="shaoniandream-password" data-shaoniandream-password type="password" autocomplete="off" placeholder="密码"></div></div><div class="config-actions"><button class="primary-button" type="button" data-shaoniandream-submit>登录</button><span class="config-message" data-shaoniandream-message role="status" aria-live="polite"></span></div></details>` : '';
+      const renderShaoniandreamLogin = (editable, configured = false) => editable ? `
+        <details class="shaoniandream-login" data-shaoniandream-login open>
+          <summary>手机号登录</summary>
+          <div class="shaoniandream-session-status"><span class="shaoniandream-status ${configured ? 'configured' : ''}" data-shaoniandream-status>${configured ? '已保存会话' : '未保存会话'}</span><small>会话是否有效以实际请求为准</small></div>
+          <p class="shaoniandream-login-hint">使用少年梦 App 的手机号和密码，登录成功后自动保存到当前机器人。</p>
+          <div class="config-fields">
+            <div class="config-field"><label for="shaoniandream-phone">手机号</label><input id="shaoniandream-phone" data-shaoniandream-phone type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="请输入手机号"></div>
+            <div class="config-field"><label for="shaoniandream-password">密码</label><input id="shaoniandream-password" data-shaoniandream-password type="password" autocomplete="off" placeholder="请输入少年梦 App 密码"></div>
+          </div>
+          <div class="config-actions"><button class="primary-button" type="button" data-shaoniandream-submit>登录并保存</button><span class="config-message" data-shaoniandream-message role="status" aria-live="polite"></span></div>
+        </details>` : '';
       const submitShaoniandreamLogin = async (panel) => {
         const state = shaoniandreamLoginState;
         const phoneInput = panel.querySelector('[data-shaoniandream-phone]');
@@ -406,15 +416,17 @@
           const field = snapshot?.config?.fields?.find((item) => item.key === 'shaoniandream_session');
           if (field) field.configured = true;
           const savedInput = $('cfg-shaoniandream_session');
-          if (savedInput) { savedInput.value = ''; savedInput.placeholder = '已配置，留空表示不修改'; const hint = savedInput.closest('.config-field')?.querySelector('small'); if (hint) hint.textContent = '已配置，留空表示不修改'; }
-          message.textContent = '登录成功'; message.className = 'config-message ok';
+          if (savedInput) { savedInput.value = ''; savedInput.placeholder = '粘贴包含 id 和 logintoken 的 JSON'; }
+          const status = panel.querySelector('[data-shaoniandream-status]');
+          if (status) { status.textContent = '已保存会话'; status.className = 'shaoniandream-status configured'; }
+          message.textContent = '登录成功，已保存到当前机器人'; message.className = 'config-message ok';
         } catch (error) {
           if (!isCurrent()) return;
           if (error.status === 401) showAuthError(error);
           message.textContent = '登录失败，请稍后重试'; message.className = 'config-message error';
         } finally {
           if (generation === state.generation) { state.abort = null; state.busy = false; }
-          if (isCurrent()) { button.disabled = false; button.textContent = '登录'; phoneInput.disabled = false; passwordInput.disabled = false; passwordInput.value = ''; }
+          if (isCurrent()) { button.disabled = false; button.textContent = '登录并保存'; phoneInput.disabled = false; passwordInput.disabled = false; passwordInput.value = ''; }
         }
       };
       const bindShaoniandreamLogin = (editor) => {
@@ -639,10 +651,11 @@
         });
         if (!groups.length) { node.innerHTML = '<div class="empty">暂无可编辑配置</div>'; return; }
         node.innerHTML = targetId === 'qq-reader-api-config-editor' ? renderReaderApiConfig(selected, editable)
-          : groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3>${category === 'shaoniandream_settings' ? renderShaoniandreamLogin(editable) : ''}<div class="config-fields">${groupFields.map((field) => {
+          : groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3>${category === 'shaoniandream_settings' ? renderShaoniandreamLogin(editable, groupFields.some((field) => field.key === 'shaoniandream_session' && field.configured)) : ''}<div class="config-fields">${groupFields.map((field) => {
           const inputId = `cfg-${field.key}`;
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
+          if (field.key === 'shaoniandream_session') return `<details class="shaoniandream-import"><summary>高级：导入会话 JSON</summary><p>仅在已有会话 JSON 时使用；手机号登录无需填写这里。</p><div class="config-field"><label for="${inputId}">${label}</label><input id="${inputId}" type="password" data-config-field="shaoniandream_session" data-config-secret autocomplete="off" spellcheck="false" ${editable ? '' : 'disabled'} value="" placeholder="粘贴包含 id 和 logintoken 的 JSON"><small>留空不修改已保存的会话；导入后点击“保存配置”。</small></div></details>`;
           if (field.kind === 'admin_list') return renderAdminListField(field, editable);
           if (field.kind === 'boolean') return `<div class="config-field"><label for="${inputId}">${label}</label><select id="${inputId}" data-config-field="${esc(field.key)}" ${editable ? '' : 'disabled'}><option value="false" ${field.value ? '' : 'selected'}>关闭</option><option value="true" ${field.value ? 'selected' : ''}>开启</option></select><small>${esc(hint)}</small></div>`;
           if (field.kind === 'select') {
