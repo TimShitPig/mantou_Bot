@@ -187,6 +187,20 @@
     },
     "invisible": true
   },
+  "shaoniandream_settings": {
+    "description": "少年梦账号",
+    "type": "object",
+    "items": {
+      "shaoniandream_session": {
+        "description": "少年梦登录会话 JSON",
+        "type": "string",
+        "hint": "在登录保护的插件后台粘贴当前账号的登录结果或会话 JSON，只保存用户 ID 和 logintoken；按机器人隔离，只写入、不回显，留空保留。已有草稿作品 ID 由接口自动获取。",
+        "default": "",
+        "invisible": true
+      }
+    },
+    "invisible": true
+  },
   "database_settings": {
     "description": "数据库配置",
     "type": "object",

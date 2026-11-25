@@ -432,6 +432,13 @@ async def _后台刷新消息列表(
         "kind": "text", "secret": False, "default": "215",
         "hint": "默认 215，仅在远端注册表单变更时调整。",
     },
+    "shaoniandream_session": {
+        "category": "shaoniandream_settings",
+        "label": "少年梦登录会话 JSON",
+        "kind": "secret",
+        "secret": True,
+        "hint": "粘贴当前账号的登录结果或会话 JSON。只保存用户 ID 和 logintoken，按机器人隔离，只写入、不回显，留空保留；自动获取已有草稿作品 ID。",
+    },
     "uc_pan_upload_dir": {
         "category": "uc_pan_settings",
         "label": "UC 上传目录",
@@ -512,6 +519,7 @@ async def _后台刷新消息列表(
 配置字段分类显示名 = {
     "qq_reader_api_settings": "QQ 阅读开放接口",
     "zlibrary_account_settings": "ZLibrary 账号注册",
+    "shaoniandream_settings": "少年梦账号",
     "basic_settings": "权限设置",
     "help_web_settings": "帮助网页",
     "uc_pan_settings": "UC 网盘",
@@ -686,6 +694,8 @@ def _读取插件配置摘要() -> dict[str, Any]:
             字段名,
             定义.get("default", [] if 定义["kind"] == "admin_list" else ""),
         )
+        if 字段名 == "shaoniandream_session" and not 获取当前机器人AppID(配置):
+            原值 = ""
         项目: dict[str, Any] = {
             "key": 字段名,
             "category": 定义["category"],
@@ -763,6 +773,27 @@ def _校验插件配置字段(字段名: str, 值: Any) -> Any:
             return False
         raise ValueError("布尔配置值无效")
     if 定义.get("secret"):
+        if 字段名 == "shaoniandream_session":
+            if not isinstance(值, str) or not 值.strip() or len(值) > 20000:
+                raise ValueError("少年梦登录会话 JSON 格式无效")
+            try:
+                会话 = json.loads(值)
+            except (json.JSONDecodeError, RecursionError):
+                raise ValueError("少年梦登录会话 JSON 格式无效") from None
+            if isinstance(会话, dict) and "response" in 会话:
+                会话 = 会话["response"]
+            if isinstance(会话, dict) and "data" in 会话:
+                if type(会话.get("status")) is not int or 会话["status"] != 1:
+                    raise ValueError("少年梦登录结果未成功")
+                会话 = 会话["data"]
+            if not isinstance(会话, dict):
+                raise ValueError("少年梦登录会话 JSON 格式无效")
+            用户编号, 令牌 = 会话.get("id"), 会话.get("logintoken")
+            if type(用户编号) is not int or 用户编号 <= 0:
+                raise ValueError("少年梦用户 ID 格式无效")
+            if not isinstance(令牌, str) or not 令牌.strip() or len(令牌) > 4096 or any(ord(字符) < 32 or ord(字符) == 127 for 字符 in 令牌):
+                raise ValueError("少年梦登录令牌格式无效")
+            return json.dumps({"id": 用户编号, "logintoken": 令牌}, ensure_ascii=False, separators=(",", ":"))
         if 字段名 == "image_host_token":
             if not isinstance(值, str) or not re.fullmatch(r"imgbed_[A-Za-z0-9_-]{16,256}", 值):
                 raise ValueError("图床 Token 格式无效")
@@ -2496,6 +2527,8 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
             定义 = 插件配置字段定义.get(字段名)
             if not 定义:
                 raise ValueError("配置字段不支持")
+            if 字段名 == "shaoniandream_session" and not 获取当前机器人AppID(_当前作用域配置()):
+                raise ValueError("请先选择机器人")
             if 定义.get("secret") and (
                 原值 is None or isinstance(原值, str) and (
                     原值 == "" if 字段名 == "image_host_token" else not 原值.strip()

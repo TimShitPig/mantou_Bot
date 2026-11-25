@@ -19,6 +19,7 @@ _机器人配置写入代次 = globals().get("_机器人配置写入代次") or 
 机器人独立配置分类 = (
     "basic_settings", "uc_pan_settings", "quark_pan_settings",
     "baidu_pan_settings", "zlibrary_account_settings", "shubl_account_settings",
+    "shaoniandream_settings",
 )
 机器人独立帮助字段 = {"welcome_tutorial_image_width"}
 机器人业务字段分类 = {
@@ -30,6 +31,7 @@ _机器人配置写入代次 = globals().get("_机器人配置写入代次") or 
     "baidu_pan_cookie": "baidu_pan_settings", "baidu_pan_upload_dir": "baidu_pan_settings",
     "zlibrary_mail_api_key": "zlibrary_account_settings", "zlibrary_registration_rx": "zlibrary_account_settings",
     "shubl_account": "shubl_account_settings", "shubl_token": "shubl_account_settings",
+    "shaoniandream_session": "shaoniandream_settings",
     "welcome_tutorial_image_width": "help_web_settings",
 }
 
@@ -254,6 +256,7 @@ def 获取机器人配置(配置: Any, appid: str = "") -> Any:
         if not isinstance(业务, dict):
             业务 = 配置表[目标] = _业务快照(数据)
             业务["shubl_account_settings"] = {}
+            业务["shaoniandream_settings"] = {}
         结果 = 机器人配置(配置, 目标, 业务)
         if len(_机器人配置缓存) >= 128:
             _机器人配置缓存.pop(next(iter(_机器人配置缓存)))

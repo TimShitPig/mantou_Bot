@@ -154,6 +154,12 @@ except Exception as exc:
     logger.warning("找书加载疯读失败：错误类型=%s", type(exc).__name__)
 
 try:
+    from 功能文件.管理功能.小说功能.小说 import 少年梦小说
+except Exception as exc:
+    少年梦小说 = None
+    logger.warning("找书加载少年梦失败：错误类型=%s", type(exc).__name__)
+
+try:
     from 功能文件.管理功能.小说功能.小说 import STV小说
 except Exception as exc:
     STV小说 = None
@@ -233,7 +239,7 @@ _找书平台调用状态: ContextVar[dict[str, bool] | None] = ContextVar("找�
 找书指定平台 = (
     "番茄", "七猫", "书旗", "QQ阅读", "QQ浏览器", "得间", "点众", "塔读",
     "百度", "小米", "宜搜", "米读", "猫眼", "酷我", "酷匠", "连城", "菠萝包",
-    "晋江", "话本", "疯狂追书", "梧桐", "书耽", "追书", "西瓜免费小说", "ZLibrary", "疯读", "STV",
+    "晋江", "话本", "疯狂追书", "梧桐", "书耽", "追书", "西瓜免费小说", "ZLibrary", "疯读", "少年梦", "STV",
 )
 指定平台找书正则 = re.compile(
     r"^(" + "|".join(
@@ -2165,6 +2171,25 @@ async def 搜索疯读(关键词: str, *, 需要数量: int = 20) -> list[dict[s
         return []
 
 
+async def 搜索少年梦(
+    关键词: str, *, 需要数量: int = 20, 配置: Any = None,
+) -> list[dict[str, Any]]:
+    if 少年梦小说 is None:
+        _标记找书平台失败()
+        raise _找书平台查询错误("search_unavailable")
+    try:
+        原始结果 = await 少年梦小说.搜索少年梦小说(关键词, limit=需要数量, config=配置)
+        if getattr(原始结果, "incomplete", False):
+            _标记找书平台失败()
+        return _整理新增平台搜索结果("少年梦", 原始结果, 需要数量)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _标记找书平台失败()
+        logger.warning("找书少年梦搜索失败：错误类型=%s", type(exc).__name__)
+        raise _找书平台查询错误("search_unavailable") from None
+
+
 async def 搜索STV(关键词: str, *, 需要数量: int = 20) -> list[dict[str, Any]]:
     if STV小说 is None:
         _标记找书平台失败()
@@ -2424,6 +2449,7 @@ def _平台优先级值(平台: Any) -> int:
         "ZLibrary": -8,
         "西瓜免费小说": -9,
         "疯读": -10,
+        "少年梦": -12,
         "STV": -11,
     }.get(str(平台 or ""), 0)
 
@@ -2657,6 +2683,7 @@ async def _聚合搜索未缓存(
                 ("书耽", lambda: 搜索书耽(词, 需要数量=数量)),
                 ("ZLibrary", lambda: 搜索ZLibrary(词, 需要数量=数量, 配置=配置)),
                 ("疯读", lambda: 搜索疯读(词, 需要数量=数量)),
+                ("少年梦", lambda: 搜索少年梦(词, 需要数量=数量, 配置=配置)),
                 ("STV", lambda: 搜索STV(词, 需要数量=数量)),
             )
 
@@ -2888,7 +2915,7 @@ async def 聚合搜索(
         return []
     缓存键 = (
         缓存键[0], 缓存键[1], tuple(sorted(允许平台集合)),
-        tuple(_拆分查询词(关键词)), "search-v29-shubl-web", 书耽账号,
+        tuple(_拆分查询词(关键词)), "search-v30-shaoniandream", 书耽账号,
     )
     现在 = time.monotonic()
     缓存 = 找书结果缓存.get(缓存键)
@@ -3289,6 +3316,10 @@ async def 获取找书下载回复流(
         if not 来源:
             return "下载失败 请重试"
         return 书耽小说.生成书耽下载回复流(event, 来源, 配置)
+    if 平台 == "少年梦" and 少年梦小说 is not None:
+        if not 少年梦小说.提取少年梦书籍编号(书籍编号):
+            return "下载失败 请重试"
+        return 少年梦小说.生成少年梦下载回复流(event, 书籍编号, 配置)
     if not 链接:
         return "下载失败 请重试"
     if 平台 == "七猫" and 七猫小说 is not None:
