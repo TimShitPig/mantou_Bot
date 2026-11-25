@@ -58,9 +58,12 @@ except Exception:
 from 功能文件.管理功能.基础功能.权限工具 import 是群文件清理管理员
 from 功能文件.管理功能.基础功能.运行状态数据库 import (
     写入运行状态值,
+    比较并更新运行状态值,
+    获取数据库配置,
     已配置运行状态数据库,
     读取运行状态值,
 )
+from 功能文件.管理功能.基础功能.机器人作用域 import 获取当前机器人AppID
 
 try:
     from 功能文件.管理功能.网盘功能 import 小说网盘
@@ -3358,6 +3361,241 @@ QQ阅读KOL短链书籍编号正则 = re.compile(
 QQ阅读登录态命名空间 = "qq_reader_auth"
 QQ阅读登录态状态键 = "login_state"
 _QQ阅读账号状态锁 = globals().get("_QQ阅读账号状态锁") or threading.RLock()
+
+_QQ阅读网页续期间隔 = 24 * 60 * 60
+_QQ阅读网页续期冷却 = 5 * 60
+_QQ阅读网页续期Cookie名 = frozenset({"alk", "ywguid", "ywkey", "ywopenid", "ywtab"})
+_QQ阅读网页续期参数名 = (
+    "appId", "areaId", "source", "returnurl", "version", "imei", "qimei",
+    "target", "ticket", "autotime", "jumpdm", "ajaxdm", "auto", "sdkversion",
+)
+
+
+def _QQ阅读续期Cookie值(value: Any) -> bool:
+    return (isinstance(value, str) and 0 < len(value) <= 8192
+            and not any(ord(ch) < 33 or ord(ch) == 127 or ch in ';,\"\\' for ch in value))
+
+
+def _QQ阅读网页登录参数(config: Any) -> dict[str, str]:
+    if not isinstance(config, dict) or config.get("secureDomain") != ".yuewen.com":
+        return {}
+    if (str(config.get("appId")) != "1450000219" or str(config.get("areaId")) != "10"
+            or config.get("baseUrl") != "https://ptlogin.yuewen.com"
+            or config.get("returnUrl") != "https://book.qq.com/loginSuccess"):
+        return {}
+    values = {key: str(config.get(key) or "") for key in _QQ阅读网页续期参数名}
+    values.update(returnurl=config["returnUrl"], auto="1", autotime="14", ticket="1")
+    values["target"] = str(config.get("target") or "iframe")
+    return values
+
+
+def _规范QQ阅读网页登录续期(value: Any, guid: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("protocol") != "yuewen-web-v1":
+        return {}
+    raw_params, raw_cookies = value.get("params"), value.get("cookies")
+    if not isinstance(raw_params, dict) or not isinstance(raw_cookies, dict):
+        return {}
+    params = {}
+    for name in _QQ阅读网页续期参数名:
+        item = raw_params.get(name, "")
+        if type(item) not in (str, int):
+            return {}
+        item = str(item)
+        if len(item) > 512 or any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+            return {}
+        params[name] = item
+    if (params["appId"] != "1450000219" or params["areaId"] != "10"
+            or params["returnurl"] != "https://book.qq.com/loginSuccess"
+            or params["auto"] != "1" or params["autotime"] != "14"
+            or params["ticket"] != "1" or params["target"] not in {"top", "iframe"}):
+        return {}
+    cookies = {name: item for name, item in raw_cookies.items()
+               if name in _QQ阅读网页续期Cookie名 and _QQ阅读续期Cookie值(item)}
+    if not cookies.get("alk") or (cookies.get("ywguid") and cookies["ywguid"] != guid):
+        return {}
+    result = {"protocol": "yuewen-web-v1", "params": params, "cookies": cookies}
+    for name in ("expires_at", "last_success", "last_attempt"):
+        result[name] = max(0, _安全整数(value.get(name), 0))
+    if not result["expires_at"]:
+        return {}
+    claim = value.get("claim")
+    if isinstance(claim, str) and re.fullmatch(r"[0-9a-f]{32}", claim):
+        result["claim"] = claim
+    return result
+
+
+def _提取QQ阅读网页登录续期(
+    session: aiohttp.ClientSession, config: dict[str, Any], data: dict[str, Any], guid: str,
+) -> dict[str, Any]:
+    params = _QQ阅读网页登录参数(config)
+    if not params or (data.get("ywGuid") not in (None, "") and str(data["ywGuid"]) != guid):
+        return {}
+    from yarl import URL
+    jar = session.cookie_jar.filter_cookies(URL("https://ptlogin.yuewen.com/"))
+    cookies = {name: item.value for name, item in jar.items() if name in _QQ阅读网页续期Cookie名}
+    if "alk" in data:
+        if not _QQ阅读续期Cookie值(data["alk"]):
+            return {}
+        cookies["alk"] = data["alk"]
+        # 仅复现 secureDomain=.yuewen.com 的官方成功分支，不把 .qq.com 票据迁入。
+        for name, source in (("ywguid", "ywGuid"), ("ywkey", "ywKey"), ("ywopenid", "ywOpenId")):
+            if data.get(source) not in (None, ""):
+                cookies[name] = str(data[source])
+    days = _安全整数(data.get("alkts") or 15, 0)
+    if not 1 <= days <= 366:
+        return {}
+    now = int(time.time())
+    return _规范QQ阅读网页登录续期({
+        "protocol": "yuewen-web-v1", "params": params, "cookies": cookies,
+        "expires_at": now + days * 86400, "last_success": now, "last_attempt": 0,
+    }, guid)
+
+
+def _QQ阅读续期作用域(配置: Any) -> tuple[str, str] | None:
+    appid = 获取当前机器人AppID(配置)
+    if not appid or not 已配置运行状态数据库(配置):
+        return None
+    raw = json.dumps(获取数据库配置(配置), ensure_ascii=True, sort_keys=True, default=str)
+    return appid, hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _认领QQ阅读续期(配置: Any, 凭据: dict[str, Any]) -> dict[str, Any] | None:
+    with _QQ阅读账号状态锁:
+        scope = _QQ阅读续期作用域(配置)
+        if scope is None:
+            return None
+        raw = 读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, "")
+        状态 = _解析QQ阅读账号状态(raw)
+        账号 = next((row for row in 状态["accounts"]
+                     if row["ywguid"] == 凭据.get("ywguid") and row["ywkey"] == 凭据.get("ywkey")), None)
+        if 账号 is None or not 账号["enabled"]:
+            return None
+        renewal = 账号.get("renewal") or {}
+        now = int(time.time())
+        if (not renewal or renewal["expires_at"] <= now
+                or (renewal["last_success"] and now - renewal["last_success"] < _QQ阅读网页续期间隔)
+                or (renewal["last_attempt"] and now - renewal["last_attempt"] < _QQ阅读网页续期冷却)):
+            return None
+        renewal.update(last_attempt=now, claim=secrets.token_hex(16))
+        new_raw = json.dumps(状态, ensure_ascii=True, separators=(",", ":"))
+        if (_QQ阅读续期作用域(配置) != scope or not 比较并更新运行状态值(
+                配置, QQ阅读登录态命名空间, {QQ阅读登录态状态键: raw}, {QQ阅读登录态状态键: new_raw})):
+            return None
+        return {"id": 账号["id"], "ywguid": 账号["ywguid"], "ywkey": 账号["ywkey"],
+                "renewal": renewal, "scope": scope}
+
+
+async def _读取QQ阅读续期JSON(response: Any, *, jsonp: bool = False) -> dict[str, Any]:
+    chunks, size = [], 0
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        size += len(chunk)
+        if size > 1024 * 1024:
+            raise ValueError("renewal_response_large")
+        chunks.append(chunk)
+    if response.status != 200:
+        raise ValueError("renewal_http_error")
+    text = b"".join(chunks).decode("utf-8", "strict")
+    if jsonp:
+        wrapper = re.fullmatch(r"\s*LoginV1\.checkStatusCallback\((.*)\)\s*;?\s*", text, re.S)
+        if wrapper is None:
+            raise ValueError("renewal_jsonp_invalid")
+        text = wrapper.group(1)
+    result = json.loads(text)
+    if not isinstance(result, dict) or type(result.get("code")) is not int or result["code"] != 0 or not isinstance(result.get("data"), dict):
+        raise ValueError("renewal_rejected")
+    return result["data"]
+
+
+async def _请求QQ阅读网页续期(凭据: dict[str, Any]) -> dict[str, Any]:
+    from yarl import URL
+    renewal = 凭据["renewal"]
+    params = {**renewal["params"], "format": "jsonp", "method": "LoginV1.checkStatusCallback"}
+    async with aiohttp.ClientSession(
+        headers={"User-Agent": QQ阅读扫码登录客户端._UA},
+        timeout=aiohttp.ClientTimeout(total=20, sock_connect=5, sock_read=12),
+        connector=aiohttp.TCPConnector(limit=2), cookie_jar=aiohttp.CookieJar(),
+    ) as session:
+        if hasattr(session, "_retry_connection"):
+            session._retry_connection = False
+        async with session.get(
+            "https://ptlogin.yuewen.com/login/checkStatus", params=params, allow_redirects=False,
+            headers={"Cookie": "; ".join(f"{name}={value}" for name, value in renewal["cookies"].items()),
+                     "Referer": "https://passport.yuewen.com/yuewen.html"},
+        ) as response:
+            data = await _读取QQ阅读续期JSON(response, jsonp=True)
+        guid = str(data.get("ywGuid") or 凭据["ywguid"])
+        if guid != 凭据["ywguid"] or not _QQ阅读续期Cookie值(data.get("ticket")):
+            raise ValueError("renewal_identity_invalid")
+        for name in ("ywGuid", "ywguid", "uid"):
+            if data.get(name) not in (None, "") and str(data[name]) != guid:
+                raise ValueError("renewal_identity_invalid")
+        async with session.get(
+            "https://book.qq.com/api/authen/getKeyByTicket", allow_redirects=False,
+            headers={"ywguid": guid, "ywTicket": data["ticket"], "Referer": "https://book.qq.com/loginSuccess"},
+        ) as response:
+            exchanged = await _读取QQ阅读续期JSON(response)
+        for name in ("ywGuid", "ywguid", "uid"):
+            if exchanged.get(name) not in (None, "") and str(exchanged[name]) != guid:
+                raise ValueError("renewal_identity_invalid")
+        if not _QQ阅读续期Cookie值(exchanged.get("ywkey")) or len(exchanged["ywkey"]) > 256:
+            raise ValueError("renewal_key_invalid")
+        login = 解析QQ阅读Cookie(json.dumps({"ywguid": guid, "ywkey": exchanged["ywkey"]}))
+        if not login:
+            raise ValueError("renewal_key_invalid")
+        updated = {**renewal, "cookies": dict(renewal["cookies"])}
+        for name, item in session.cookie_jar.filter_cookies(URL("https://ptlogin.yuewen.com/")).items():
+            if name == "ywguid" and item.value != guid:
+                raise ValueError("renewal_identity_invalid")
+            if name in _QQ阅读网页续期Cookie名 and _QQ阅读续期Cookie值(item.value):
+                updated["cookies"][name] = item.value
+        if "alk" in data:
+            if not _QQ阅读续期Cookie值(data["alk"]):
+                updated = {}
+            else:
+                days = _安全整数(data.get("alkts") or 15, 0)
+                if not 1 <= days <= 366:
+                    raise ValueError("renewal_lifetime_invalid")
+                updated["cookies"]["alk"] = data["alk"]
+                updated["expires_at"] = int(time.time()) + days * 86400
+        if updated:
+            for name, source in (("ywguid", "ywGuid"), ("ywkey", "ywKey"), ("ywopenid", "ywOpenId")):
+                if data.get(source) not in (None, ""):
+                    updated["cookies"][name] = str(data[source])
+            updated.pop("claim", None)
+            updated["last_success"] = int(time.time())
+            updated = _规范QQ阅读网页登录续期(updated, guid)
+        return {"id": 凭据["id"], **login, "renewal": updated}
+
+
+def _提交QQ阅读续期(配置: Any, 领用: dict[str, Any], 新凭据: dict[str, Any]) -> bool:
+    with _QQ阅读账号状态锁:
+        if _QQ阅读续期作用域(配置) != 领用["scope"] or 新凭据.get("ywguid") != 领用["ywguid"]:
+            return False
+        raw = 读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, "")
+        状态 = _解析QQ阅读账号状态(raw)
+        账号 = next((row for row in 状态["accounts"] if row["id"] == 领用["id"]), None)
+        if (账号 is None or not 账号["enabled"] or 账号["ywkey"] != 领用["ywkey"]
+                or 账号.get("renewal", {}).get("claim") != 领用["renewal"]["claim"]):
+            return False
+        账号.update(ywkey=新凭据["ywkey"], renewal=新凭据["renewal"], updated_at=int(time.time()),
+                  auth_status="unknown", auth_checked_at=time.time_ns())
+        new_raw = json.dumps(状态, ensure_ascii=True, separators=(",", ":"))
+        return (_QQ阅读续期作用域(配置) == 领用["scope"] and 比较并更新运行状态值(
+            配置, QQ阅读登录态命名空间, {QQ阅读登录态状态键: raw}, {QQ阅读登录态状态键: new_raw}))
+
+
+async def 尝试续期QQ阅读账号(配置: Any, 凭据: dict[str, Any]) -> dict[str, Any]:
+    """只用已保存的官方网页长期会话换票；未知结果保留旧值并遵守冷却。"""
+    try:
+        领用 = await _平台同步调用(_认领QQ阅读续期, 配置, 凭据)
+        if 领用 is None:
+            return 凭据
+        新凭据 = await _请求QQ阅读网页续期(领用)
+        if await _平台同步调用(_提交QQ阅读续期, 配置, 领用, 新凭据):
+            return 新凭据
+    except Exception as exc:
+        logger.debug("QQ阅读会话续期未完成：阶段=renewal，错误类型=%s", type(exc).__name__)
+    return 凭据
 小说缓存目录 = 文件缓存工具.小说缓存目录
 文件声明 = (
     "声明：本文件由机器人自动整理生成，仅供个人学习交流和临时阅读使用。"
@@ -3702,6 +3940,7 @@ def _解析QQ阅读账号项(数据: Any) -> dict[str, Any] | None:
     return {
         "id": 账号ID,
         **凭据,
+        "renewal": _规范QQ阅读网页登录续期(数据.get("renewal"), 凭据["ywguid"]),
         "enabled": 数据.get("enabled") is not False,
         "nickname": str(资料.get("nickname") or "")[:120],
         "avatar_url": 规范QQ阅读头像地址(资料.get("avatar_url")),
@@ -3722,7 +3961,10 @@ def _解析QQ阅读账号项(数据: Any) -> dict[str, Any] | None:
 
 
 def _读取QQ阅读账号状态(配置: Any) -> dict[str, Any]:
-    raw = 读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, "")
+    return _解析QQ阅读账号状态(读取运行状态值(配置, QQ阅读登录态命名空间, QQ阅读登录态状态键, ""))
+
+
+def _解析QQ阅读账号状态(raw: str) -> dict[str, Any]:
     if not raw:
         return {"version": 2, "selected_id": "", "accounts": []}
     try:
@@ -3757,7 +3999,10 @@ def _写入QQ阅读账号状态(配置: Any, 状态: dict[str, Any]) -> None:
 def _QQ阅读账号摘要(状态: dict[str, Any]) -> dict[str, Any]:
     列表 = []
     for 账号 in 状态["accounts"]:
-        资料 = {键: 值 for 键, 值 in 账号.items() if 键 != "ywkey"}
+        资料 = {键: 账号[键] for 键 in ("id", "ywguid", "enabled", "nickname", "avatar_url", "phone",
+                                    "updated_at", "profile_updated_at", "auth_status", "auth_checked_at")}
+        续期 = 账号.get("renewal") or {}
+        资料["renewal_available"] = bool(续期 and 续期.get("expires_at", 0) > time.time())
         资料["vip"] = dict(账号["vip"])
         资料["selected"] = 账号["id"] == 状态["selected_id"]
         if not 资料["nickname"]:
@@ -3779,7 +4024,8 @@ def 读取QQ阅读账号凭据(配置: Any, 账号ID: str = "") -> dict[str, Any
         目标 = str(账号ID or 状态["selected_id"])
         for 项 in 状态["accounts"]:
             if 项["id"] == 目标:
-                return {"id": 项["id"], "ywguid": 项["ywguid"], "ywkey": 项["ywkey"]}
+                return {"id": 项["id"], "ywguid": 项["ywguid"], "ywkey": 项["ywkey"],
+                        "renewal": dict(项.get("renewal") or {})}
     return None
 
 
@@ -3801,7 +4047,7 @@ def 保存QQ阅读账号(
             raise QQ阅读重登账号错误("账号身份不匹配或已删除")
         if 原值:
             # 换票据后保留已有资料，但下次刷新重新核对官方会员状态。
-            原值.update({"ywkey": 凭据["ywkey"],
+            原值.update({"ywkey": 凭据["ywkey"], "renewal": 凭据["renewal"],
                          "updated_at": int(time.time()),
                          "auth_status": "unknown", "auth_checked_at": time.time_ns()})
             if not 账号ID:
@@ -3827,6 +4073,8 @@ def 设置QQ阅读账号启用(配置: Any, 账号ID: str, 启用: bool) -> dict
         if 账号 is None:
             raise ValueError("QQ阅读账号不存在")
         账号["enabled"] = 启用
+        if 账号.get("renewal"):
+            账号["renewal"].pop("claim", None)
         if not 启用 and 状态["selected_id"] == 账号ID:
             状态["selected_id"] = next((项["id"] for 项 in 状态["accounts"] if 项["enabled"]), "")
         elif 启用 and not 状态["selected_id"]:
@@ -3893,6 +4141,7 @@ async def 刷新QQ阅读账号资料(配置: Any, 账号ID: str = "") -> dict[st
     凭据 = await _平台同步调用(读取QQ阅读账号凭据, 配置, 账号ID)
     if not 凭据:
         raise ValueError("QQ阅读账号不存在")
+    凭据 = await 尝试续期QQ阅读账号(配置, 凭据)
     with QQ阅读账号上下文(凭据):
         async with 创建QQ阅读HTTP会话(concurrency=2) as session:
             资料 = await 查询QQ阅读账号资料(session)
@@ -5696,8 +5945,14 @@ async def 生成QQ阅读下载文件流(
                 }
 
             stage = "account"
-            account_vip = await 查询QQ阅读账号VIP状态(session)
             当前账号 = ConfigManager.get_instance()
+            if 状态配置 is not None and 当前账号.uid and 当前账号.usid:
+                旧凭据 = {"ywguid": 当前账号.uid, "ywkey": 当前账号.usid}
+                续期凭据 = await 尝试续期QQ阅读账号(状态配置, 旧凭据)
+                if (_QQ阅读配置上下文.get() is 当前账号 and 当前账号.uid == 旧凭据["ywguid"]
+                        and 当前账号.usid == 旧凭据["ywkey"] and 续期凭据.get("ywguid") == 当前账号.uid):
+                    当前账号.usid = 续期凭据["ywkey"]
+            account_vip = await 查询QQ阅读账号VIP状态(session)
             if 状态配置 is not None and 当前账号.uid and 当前账号.usid and account_vip.get("auth_status") in {"valid", "invalid"}:
                 凭据 = {"id": "qr_" + hashlib.sha256(当前账号.uid.encode("ascii")).hexdigest()[:20],
                         "ywguid": 当前账号.uid, "ywkey": 当前账号.usid}
@@ -5873,6 +6128,7 @@ class QQ阅读扫码登录客户端:
         self._closed = False
         self._expires_at = 0.0
         self._oauth: dict[str, str] = {}
+        self._renewal_config: dict[str, Any] = {}
         self._graph_url = ""
         self._oauth_openapi = "#"
         self._xlogin_url = ""
@@ -6020,13 +6276,21 @@ class QQ阅读扫码登录客户端:
                 "appId": "1450000219", "areaId": "10", "tab": "qq",
                 "returnurl": "https://book.qq.com/loginSuccess", "popup": "1",
                 "ticket": "1", "target": "iframe", "version": "1.0",
-                "unionshow": "00001",
+                "unionshow": "00001", "auto": "1", "autotime": "14",
             }
             self._设置诊断阶段("login_page")
             _, body, _ = await self._请求(
-                "GET", "https://login.book.qq.com/login.html?" + urlencode(login_params),
+                "GET", "https://passport.yuewen.com/yuewen.html?" + urlencode(login_params),
             )
             page = body.decode("utf-8", "replace")
+            init = re.search(r"\bLoginV1\.init\(\s*(\{)", page)
+            if init:
+                try:
+                    config, _ = json.JSONDecoder().raw_decode(page[init.start(1):])
+                    if _QQ阅读网页登录参数(config):
+                        self._renewal_config = config
+                except (ValueError, TypeError, RecursionError):
+                    pass
             button = re.search(
                 r'href-value="([^"]{1,8192})"\s+id="qqLoginButton"', page,
             )
@@ -6134,6 +6398,7 @@ class QQ阅读扫码登录客户端:
             final_url, body, more = await self._请求("GET", callback)
             frames.extend(more)
         guid, key, ticket = "", "", ""
+        renewal_data: dict[str, Any] = {}
         landing = ""
         for frame_url, frame_body in frames:
             parsed_url = urlsplit(frame_url)
@@ -6157,6 +6422,8 @@ class QQ阅读扫码登录客户端:
                 raise RuntimeError("qqreader_qr_reader_callback_invalid")
             guid = str(details.get("ywGuid") or guid)
             key = str(details.get("ywKey") or key)
+            if parsed_url.hostname in {"ptlogin.yuewen.com", "passport.yuewen.com"}:
+                renewal_data = details
             ticket = str(details.get("ticket") or ticket)
             redirect = details.get("302url") or callback_data.get("302url")
             if redirect and not key:
@@ -6190,7 +6457,11 @@ class QQ阅读扫码登录客户端:
             raise RuntimeError("qqreader_qr_reader_credentials_missing")
         self.status = "confirmed"
         self.诊断阶段 = "confirmed"
-        return {"ywguid": guid, "ywkey": key}
+        result = {"ywguid": guid, "ywkey": key}
+        renewal = _提取QQ阅读网页登录续期(self._session, self._renewal_config, renewal_data, guid)
+        if renewal:
+            result["renewal"] = renewal
+        return result
 
     async def 等待登录并获取登录态(self, timeout: float = 300, interval: float = 2) -> dict[str, str]:
         if self.status != "waiting" or self._session is None or self._closed:
@@ -6307,7 +6578,7 @@ class QQ阅读手机号登录客户端:
             "appId": "1450000219", "areaId": "10", "tab": "phone",
             "returnurl": "https://book.qq.com/loginSuccess", "popup": "1",
             "ticket": "1", "target": "iframe", "version": "1.0",
-            "unionshow": "00001",
+            "unionshow": "00001", "auto": "1", "autotime": "14",
         }
         page = (await self._读取(self._官网地址 + "?" + urlencode(params))).decode("utf-8", "replace")
         match = re.search(r"\bLoginV1\.init\(\s*(\{)", page)
@@ -6355,10 +6626,10 @@ class QQ阅读手机号登录客户端:
             "qimei": str(config.get("qimei") or ""),
             "target": str(config.get("target") or "iframe"),
             "ticket": str(config.get("ticket") or "1"),
-            "autotime": str(config.get("autoTime") or "14"),
+            "autotime": "14",
             "jumpdm": str(config.get("jumpdm") or ""),
             "ajaxdm": str(config.get("ajaxdm") or "yuewen"),
-            "auto": str(config.get("autoLoginFlag") or "0"),
+            "auto": "1",
             "sdkversion": str(config.get("sdkversion") or ""),
             "format": "jsonp", "method": self._回调,
         }
@@ -6466,6 +6737,9 @@ class QQ阅读手机号登录客户端:
             }))
             if not login:
                 raise RuntimeError("qqreader_sms_credentials_missing")
+            renewal = _提取QQ阅读网页登录续期(self._session, self._config, result, login["ywguid"])
+            if renewal:
+                login["renewal"] = renewal
             self.status = "confirmed"
             await self.关闭()
             return login
