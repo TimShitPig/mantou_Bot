@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -153,7 +154,7 @@ def _获取小说列表内容(配置: Any = None) -> str:
 }
 
 
-def _获取使用教程内容(配置: Any = None) -> str:
+def _获取使用教程内容(配置: Any = None, 图片地址表: dict[str, str] | None = None) -> str:
     from 功能文件.页面功能 import 帮助网页后端
 
     宽度值 = 帮助网页后端._读取帮助网页字段(配置, "welcome_tutorial_image_width")
@@ -170,10 +171,80 @@ def _获取使用教程内容(配置: Any = None) -> str:
     内容 = ["## 使用教程"]
     for 序号, (说明, (文件名, 原宽, 原高)) in enumerate(zip(步骤, 教程图片规格), 1):
         内容.append(说明)
-        图片地址 = 教程图片地址[文件名]
+        图片地址 = 图片地址表[文件名] if 图片地址表 is not None else "/tutorial-images/" + 文件名
         图片高度 = round(原高 * 图片宽度 / 原宽)
         内容.append(f"![步骤{序号}示例 #{图片宽度}px #{图片高度}px]({图片地址})")
     return "\n\n".join(内容)
+
+
+async def 处理使用教程回调(event: Any, 文本: str, 配置: Any = None) -> bool:
+    """四张本地原图转为 QQ 官方素材，在同一条 Markdown 中按原顺序发送。"""
+    if 解析欢迎回调命令(文本) != "教程" or not 权限工具.是QQ官方机器人(event):
+        return False
+    from 功能文件.管理功能.基础功能 import QQ官方素材
+
+    http = _读取字段(_读取字段(_读取字段(event, "bot"), "api"), "_http")
+    appid = str(_读取字段(_读取字段(http, "_token"), "app_id", "") or "").strip()
+    if http is None or not re.fullmatch(r"[0-9]{4,32}", appid):
+        logger.warning("QQ使用教程发送失败：stage=identity_missing")
+        return True
+    原图目录 = Path(__file__).resolve().parents[2] / "页面功能" / "教程图片"
+
+    def 读取原图() -> dict[str, bytes]:
+        return {文件名: (原图目录 / 文件名).read_bytes() for 文件名, _, _ in 教程图片规格}
+
+    读取任务 = asyncio.create_task(asyncio.to_thread(读取原图))
+    try:
+        原图 = await asyncio.shield(读取任务)
+    except asyncio.CancelledError:
+        while not 读取任务.done():
+            try:
+                await asyncio.shield(读取任务)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not 读取任务.cancelled():
+            读取任务.exception()
+        raise
+    except OSError:
+        logger.warning("QQ使用教程发送失败：stage=local_image")
+        await 帮助功能.发送QQ官方提及Markdown(event, "教程图片暂时无法发送，请稍后重试")
+        return True
+
+    任务 = [asyncio.create_task(QQ官方素材.获取Markdown图片(http, appid, 原图[文件名]))
+          for 文件名, _, _ in 教程图片规格]
+    try:
+        # wait 不随外层取消上传等待者，避免把已提交的素材请求变成待重传任务。
+        await asyncio.wait(任务)
+        结果 = await asyncio.gather(*任务, return_exceptions=True)
+        for 资料 in 结果:
+            if isinstance(资料, BaseException):
+                raise 资料
+    except BaseException as 异常:
+        while any(not 子任务.done() for 子任务 in 任务):
+            try:
+                await asyncio.wait(任务)
+            except asyncio.CancelledError:
+                continue
+        await asyncio.gather(*任务, return_exceptions=True)
+        if isinstance(异常, asyncio.CancelledError):
+            raise
+        if not isinstance(异常, Exception):
+            raise
+        logger.warning("QQ使用教程发送失败：stage=%s, http_status=%s, code=%s",
+                       异常.stage if isinstance(异常, QQ官方素材.QQ素材错误) else "local_material",
+                       异常.status if isinstance(异常, QQ官方素材.QQ素材错误) and 异常.status is not None else "none",
+                       异常.code if isinstance(异常, QQ官方素材.QQ素材错误) and 异常.code is not None else "none")
+        await 帮助功能.发送QQ官方提及Markdown(event, "教程图片暂时无法发送，请稍后重试")
+        return True
+    if str(_读取字段(_读取字段(http, "_token"), "app_id", "") or "").strip() != appid:
+        logger.warning("QQ使用教程发送失败：stage=identity_changed")
+        return True
+    素材地址 = {规格[0]: 资料["url"] for 规格, 资料 in zip(教程图片规格, 结果)}
+    await 帮助功能.发送Markdown键盘消息(event, _获取使用教程内容(配置, 素材地址), None,
+                                   记录展示文本=_获取使用教程内容(配置))
+    return True
 
 
 def 获取欢迎回调内容(文本: str, 配置: Any = None) -> tuple[str, None] | None:

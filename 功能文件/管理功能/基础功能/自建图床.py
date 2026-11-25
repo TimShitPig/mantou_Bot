@@ -33,11 +33,33 @@ class 图床错误(RuntimeError):
     def __init__(
         self, stage: str, status: int | None = None, *, submitted: bool = False,
         operation: str = "prepare", progress: dict[str, Any] | None = None,
+        request_stage: str = "", request_category: str = "", source_error_type: str = "",
     ):
         super().__init__(stage)
         self.stage, self.status = stage, status
         self.submitted, self.operation = bool(submitted), operation
         self.progress = dict(progress or {})
+        self.request_stage, self.request_category = request_stage, request_category
+        self.source_error_type = source_error_type
+
+
+def _请求错误分类(异常: BaseException) -> tuple[str, str]:
+    """按异常类型分类，不读取可能包含地址、票据或响应原文的异常文字。"""
+    for 名称, 分类 in (
+        ("ConnectionTimeoutError", "connect_timeout"), ("SocketTimeoutError", "read_timeout"),
+        ("ServerTimeoutError", "server_timeout"), ("ClientConnectorDNSError", "dns"),
+        ("ClientConnectorCertificateError", "tls"), ("ClientConnectorSSLError", "tls"),
+        ("ClientSSLError", "tls"), ("ClientPayloadError", "payload"),
+        ("ClientConnectorError", "connect"), ("ServerDisconnectedError", "network"),
+        ("ClientConnectionError", "network"), ("ClientResponseError", "http"),
+        ("ClientError", "network"),
+    ):
+        if isinstance(异常, getattr(aiohttp, 名称, ())):
+            return 分类, 名称
+    for 类型, 分类 in ((TimeoutError, "total_timeout"), (OSError, "io"), (ValueError, "invalid_data"), (TypeError, "invalid_data")):
+        if isinstance(异常, 类型):
+            return 分类, 类型.__name__
+    return "unknown", "Error"
 
 
 def 读取图片资料(数据: bytes) -> dict[str, Any]:
@@ -261,26 +283,33 @@ async def _请求(客户端, 上传Token, 参数, 表单, 状态, 操作, 提交
         错误.progress = dict(状态)
         raise
     # 一旦进入 POST，无论断连、取消还是响应解析失败，调用方必须保留待确认标记。
+    请求阶段, HTTP状态 = "request", None
     try:
         async with 客户端.post(
             图床地址 + "/upload", params=参数, data=表单,
             headers={"Authorization": "Bearer " + 上传Token}, allow_redirects=False,
         ) as 响应:
+            请求阶段, HTTP状态 = "response", 响应.status
             结果 = await _读取响应(响应)
+        请求阶段 = "confirm"
         新状态 = 确认(结果, 待确认)
     except asyncio.CancelledError:
         raise
     except 图床错误 as 错误:
         raise 图床错误(
-            错误.stage, 错误.status if 错误.status is not None else 200,
+            错误.stage, 错误.status if 错误.status is not None else HTTP状态,
             submitted=True, operation=操作, progress=待确认,
+            request_stage=请求阶段,
+            request_category="http" if 错误.stage == "upload" else "invalid_response",
+            source_error_type="图床错误",
         ) from None
-    except (asyncio.TimeoutError, TimeoutError):
-        raise 图床错误("timeout", submitted=True, operation=操作, progress=待确认) from None
-    except aiohttp.ClientError:
-        raise 图床错误("request", submitted=True, operation=操作, progress=待确认) from None
-    except (OSError, ValueError, TypeError):
-        raise 图床错误("request", submitted=True, operation=操作, progress=待确认) from None
+    except (aiohttp.ClientError, OSError, ValueError, TypeError, asyncio.TimeoutError) as 异常:
+        分类, 根类型 = _请求错误分类(异常)
+        raise 图床错误(
+            "timeout" if 分类.endswith("timeout") else "request", HTTP状态,
+            submitted=True, operation=操作, progress=待确认,
+            request_stage=请求阶段, request_category=分类, source_error_type=根类型,
+        ) from None
     await _回调(进度回调, 新状态, 已提交=True, 操作=操作)
     return 新状态
 

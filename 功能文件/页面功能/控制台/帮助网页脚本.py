@@ -3112,6 +3112,7 @@
         source = source.replace(/<@all>/gi, () => mentionToken('全体成员'));
         source = source.replace(/<@!?([A-Za-z0-9_-]{5,128})>/g, (_, id) => mentionToken(resolveMentionName(id, profiles)));
         source = source.replace(/@全体成员/g, () => mentionToken('全体成员'));
+        source = source.replace(/!\[[^\]\n]*\]\((\/tutorial-images\/(?:share-link\.jpg|search-command\.png|select-result\.png|open-book\.jpg))\)/g, (_, target) => commandToken('image', target, '图片'));
         source = source.replace(/!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/gi, (_, target) => commandToken('image', target, '图片'));
         source = source.replace(/<qqbot-cmd-(input|enter)\b([^>]*)\/?\s*>/gi, (_, kind, attributes) => {
           const command = decodeMsgToken(msgTagAttribute(attributes, 'text'));
@@ -3149,6 +3150,46 @@
           if (item.kind === 'image') return renderMessageMedia({type:'图片', src:item.command});
           return `<button type="button" class="msg-command-chip" data-msg-command="${esc(item.command)}" data-msg-command-kind="${esc(item.kind)}" aria-label="${esc(item.label)}">${esc(item.label)}</button>`;
         });
+      };
+      const renderMsgMessageContent = (message, content, profiles = msgState.profiles) => {
+        const fallback = () => renderMsgMarkup(content, profiles);
+        // 官方系统表情编号；Unicode emoji 保持原字符，不按文字名称猜表情。
+        const systemImages = {"4":"104","5":"105","8":"108","9":"109","10":"110","12":"112","14":"100","16":"116","20":"120","21":"121","23":"123","24":"124","25":"125","26":"126","27":"127","28":"128","29":"129","30":"130","32":"132","33":"133","34":"134","38":"138","39":"139","41":"193","42":"190","43":"192","49":"178","53":"168","60":"160","63":"163","66":"166","74":"176","75":"175","76":"179","78":"181","79":"182","85":"191","89":"156","96":"117","97":"140","98":"141","99":"142","100":"143","101":"144","102":"145","103":"146","104":"147","106":"149","109":"152","111":"154","116":"165","118":"183","120":"185","122":"187","123":"188","124":"189","125":"195","129":"199","144":"121009","147":"121012","171":"241","173":"243","174":"244","175":"245","176":"246","179":"249","180":"250","181":"251","182":"252","183":"253","201":"271","203":"273","212":"282","214":"284","219":"289","222":"292","227":"294","232":"302","240":"310","243":"313","262":"10262","264":"10264","265":"10265","266":"10266","267":"10267","268":"10268","269":"10269","270":"10270","271":"10271","272":"10272","273":"10273","277":"10277","278":"20237","281":"10281","282":"10282","284":"10284","285":"10285","287":"10287","289":"10289","290":"20240","293":"10293","294":"10294","297":"10297","298":"10298","299":"10299","305":"10305","306":"10306","307":"10307","314":"10314","318":"10318","319":"10319","320":"10320","322":"10322","324":"10324","326":"10326"};
+        let source = String(content || '');
+        try {
+          let raw = message?.raw_message;
+          if (typeof raw === 'string' && raw.length <= 16384) raw = JSON.parse(raw);
+          for (let depth = 0; raw && typeof raw === 'object' && depth < 4; depth += 1) {
+            if (typeof raw.content === 'string') { source = raw.content; break; }
+            raw = raw.raw_data || raw.d || raw.data || raw.payload;
+          }
+        } catch (_) { /* 截断或旧 repr 原文仍使用已有可读正文。 */ }
+        const pattern = /<faceType=\d+,faceId="([^"\n]*)"(?:,ext="([^"\n]*)")?>|<emoji:([0-9]{1,6})>/g;
+        const parts = [];
+        let offset = 0;
+        for (const match of source.matchAll(pattern)) {
+          if (match.index > offset) parts.push({text:source.slice(offset, match.index)});
+          const id = match[3] || match[1];
+          let label = match[3] ? `[表情${id}]` : (id ? `[表情${id}]` : '[表情]');
+          if (match[2] && match[2].length <= 4096) {
+            try {
+              const bytes = Uint8Array.from(atob(match[2]), character => character.charCodeAt(0));
+              const extra = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
+              if (typeof extra.text === 'string' && extra.text.trim()) label = extra.text;
+            } catch (_) { /* 未知扩展不作为 URL 或 HTML。 */ }
+          }
+          parts.push({text:label, code:/^[0-9]{1,6}$/.test(id) && Object.hasOwn(systemImages, id) ? systemImages[id] : ''});
+          offset = match.index + match[0].length;
+        }
+        if (!offset) return fallback();
+        if (offset < source.length) parts.push({text:source.slice(offset)});
+        const decoded = parts.map(part => part.text).join('');
+        const normalized = value => replaceMsgMentions(value, profiles).trim();
+        // 只恢复同条消息中能与当前正文完整对齐的标签，不借引用或其它消息猜测。
+        if (normalized(decoded) !== normalized(content) && source.trim() !== String(content || '').trim()) return fallback();
+        return parts.map(part => part.code
+          ? `<img class="msg-qq-emoji" src="https://qzonestyle.gtimg.cn/qzone/em/e${part.code}.gif" alt="${esc(part.text)}" title="${esc(part.text)}" width="28" height="28" style="display:inline-block;vertical-align:middle;object-fit:contain" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode(this.alt))">`
+          : renderMsgMarkup(part.text, profiles)).join('');
       };
       const renderMsgKeyboardButtons = (value) => {
         if (!Array.isArray(value)) return '';
@@ -6916,6 +6957,14 @@
       const mediaProxyUrl = (src, mode = 'image', name = '', appid = consoleAppid) => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
+        const tutorialImageUrls = new Map([
+          ['https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514788714_share-link.jpg', 'share-link.jpg'],
+          ['https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514811013_search-command.png', 'search-command.png'],
+          ['https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514819945_select-result.png', 'select-result.png'],
+          ['https://mantou-imgbed.pages.dev/file/mantou-bot/tutorial/1795514829399_open-book.jpg', 'open-book.jpg'],
+        ]);
+        const tutorialImage = tutorialImageUrls.get(src);
+        if (tutorialImage) return `/tutorial-images/${tutorialImage}`;
         try {
           const host = new URL(direct).hostname.toLowerCase().replace(/\.$/, '');
           const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qlogo.cn', 'qq.com.cn', 'qq.com'];
@@ -6955,7 +7004,7 @@
           const type = String(item.type || item.media_type || '文件');
           const contentType = String(item.content_type || item.mime_type || '').toLowerCase();
            const directSrc = msgImgbedUrl(item.imgbed_url) || item.src || item.url || item.download_url;
-           const saveLabel = ({queued:'保存中', downloading:'保存中', downloaded:'保存中', uploading:'保存中', submitting:'保存中', stored:'已保存到图床', unknown:'保存结果待确认', failed:'保存失败', waiting_source:'等待附件地址', waiting_token:'待配置图床'})[String(item.imgbed_status || '')] || '';
+           const saveLabel = ({queued:'保存中', downloading:'保存中', downloaded:'保存中', uploading:'保存中', submitting:'保存中', unknown:'保存结果待确认', failed:'保存失败', waiting_source:'等待附件地址', waiting_token:'待配置图床'})[String(item.imgbed_status || '')] || '';
            const saveBadge = saveLabel ? `<small class="msg-media-save-status">${esc(saveLabel)}</small>` : '';
            const inlineSrc = String(item.optimistic_data || '').match(/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]+$/i) && String(item.optimistic_data).length <= 12000000 ? String(item.optimistic_data) : '';
            const src = safeMediaUrl(directSrc) || inlineSrc;
@@ -7865,7 +7914,7 @@
           if (mediaTextPosition || segmentedMedia) content = '';
           if (!content && mediaText && !segmentedMedia) content = renderText(mediaText);
           if (!content && !media) content = '（空消息）';
-          const contentHtml = content ? renderMsgMarkup(content, profiles) : '';
+          const contentHtml = content ? renderMsgMessageContent(m, content, profiles) : '';
           const plainContent = plainMsgPreview(m.content || '', profiles);
           const isWelcomeMessage = botMessage && msgState.chatType === 'group'
             && /^欢迎\s*@.+?\s+加入本群/.test(plainContent)

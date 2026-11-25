@@ -81,6 +81,28 @@ def _存储错误字段(异常: BaseException, 操作: str = "") -> dict[str, An
     }
 
 
+def _上传错误字段(异常: BaseException) -> dict[str, str]:
+    """上传诊断与数据库诊断分开，不把网络错误折叠成数据库 unknown。"""
+    操作 = getattr(异常, "operation", "")
+    阶段 = getattr(异常, "request_stage", "")
+    分类 = getattr(异常, "request_category", "")
+    根类型 = getattr(异常, "source_error_type", "")
+    return {
+        "operation": 操作 if type(操作) is str and 操作 in {"single", "init", "chunk", "merge"} else "",
+        "stage": 阶段 if type(阶段) is str and 阶段 in {"request", "response", "confirm"} else "",
+        "category": 分类 if type(分类) is str and 分类 in {
+            "connect_timeout", "read_timeout", "server_timeout", "total_timeout", "dns", "tls",
+            "payload", "connect", "network", "http", "io", "invalid_data", "invalid_response", "unknown",
+        } else "",
+        "source_error_type": 根类型 if type(根类型) is str and 根类型 in {
+            "ConnectionTimeoutError", "SocketTimeoutError", "ServerTimeoutError", "ClientConnectorDNSError",
+            "ClientConnectorCertificateError", "ClientConnectorSSLError", "ClientSSLError", "ClientPayloadError",
+            "ClientConnectorError", "ServerDisconnectedError", "ClientConnectionError", "ClientResponseError",
+            "ClientError", "TimeoutError", "OSError", "ValueError", "TypeError", "图床错误", "Error",
+        } else "",
+    }
+
+
 class 图床归档错误(RuntimeError):
     def __init__(self, stage: str, status: int | None = None, *, operation: str = "",
                  storage_stage: str = "", category: str = "unknown", mysql_code: int | None = None,
@@ -862,10 +884,12 @@ async def _处理任务(键: tuple[Any, ...], 参数: dict[str, Any]) -> None:
             参数["retry_at"] = asyncio.get_running_loop().time() + 30.0
         if 参数.get("last_error") != 阶段:
             详情 = _存储错误字段(异常)
+            上传详情 = _上传错误字段(异常)
             logger.warning(
-                "自建图床媒体保存失败：阶段=%s，数据库操作=%s，数据库阶段=%s，分类=%s，MySQL错误码=%s，根错误类型=%s，媒体序号=%s，HTTP状态=%s，错误类型=%s",
-                阶段, 详情["operation"] or "none", 详情["storage_stage"], 详情["category"],
-                详情["mysql_code"] if 详情["mysql_code"] is not None else "none", 详情["source_error_type"],
+                "自建图床媒体保存失败：阶段=%s，上传操作=%s，请求阶段=%s，数据库操作=%s，数据库阶段=%s，分类=%s，MySQL错误码=%s，根错误类型=%s，媒体序号=%s，HTTP状态=%s，错误类型=%s",
+                阶段, 上传详情["operation"] or "none", 上传详情["stage"] or "none",
+                详情["operation"] or "none", 详情["storage_stage"], 上传详情["category"] or 详情["category"],
+                详情["mysql_code"] if 详情["mysql_code"] is not None else "none", 上传详情["source_error_type"] or 详情["source_error_type"],
                 参数["index"], getattr(异常, "status", None) or "none", type(异常).__name__,
             )
             参数["last_error"] = 阶段

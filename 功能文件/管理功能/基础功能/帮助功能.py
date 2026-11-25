@@ -1135,9 +1135,12 @@ async def 发送Markdown键盘消息(
     主动发送: bool = False,
     自动提及: bool = True,
     被动事件ID: str | None = None,
+    记录展示文本: str | None = None,
 ) -> bool:
     if 自动提及:
         md文本 = 构造QQ官方提及Markdown(event, md文本)
+        if 记录展示文本 is not None:
+            记录展示文本 = 构造QQ官方提及Markdown(event, 记录展示文本)
     bot = getattr(event, "bot", None)
     api = getattr(bot, "api", None) if bot else None
     _http = getattr(api, "_http", None) if api else None
@@ -1267,7 +1270,7 @@ async def 发送Markdown键盘消息(
         return False
 
     回复模式 = "event" if 被动事件ID is not None else "proactive" if 实际主动发送 else "message"
-    记录文本 = md文本
+    记录文本 = md文本 if 记录展示文本 is None else 记录展示文本
     try:
         if 实际主动发送:
             logger.debug(
@@ -1281,7 +1284,7 @@ async def 发送Markdown键盘消息(
         _记录MD键盘发送(
             群openid,
             用户openid,
-            md文本,
+            记录文本,
             appid=发送AppID,
             消息ID=响应消息ID,
             自身REFIDX=_提取发送响应REFIDX(发送结果),
@@ -1295,7 +1298,7 @@ async def 发送Markdown键盘消息(
         if 内容违规:
             降级文本 = 清空QQ官方书名作者(md文本)
             if 降级文本:
-                记录文本 = 降级文本
+                记录文本 = 降级文本 if 记录展示文本 is None else (清空QQ官方书名作者(记录展示文本) or 记录展示文本)
                 降级消息体 = dict(消息体)
                 降级消息体["markdown"] = {"content": 降级文本}
                 降级消息体["msg_seq"] = _random.randint(1, 10000)

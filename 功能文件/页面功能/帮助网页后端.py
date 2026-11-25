@@ -989,6 +989,23 @@ def 获取帮助网页地址(配置: Any = None) -> str:
     return _构造控制台访问地址(_计算帮助网页地址(配置), 配置)
 
 
+async def _处理教程图片(request: web.Request) -> web.StreamResponse:
+    """仅公开随插件发布的四张教程配图，不读取聊天媒体或缓存。"""
+    from 功能文件.管理功能.群聊功能.群成员事件 import 教程图片规格
+
+    文件名 = request.match_info.get("filename", "")
+    if 文件名 not in {规格[0] for 规格 in 教程图片规格}:
+        raise web.HTTPNotFound()
+    目录 = Path(__file__).with_name("教程图片").resolve()
+    路径 = (目录 / 文件名).resolve()
+    if 路径.parent != 目录 or not 路径.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(路径, headers={
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
 def _数据库会话可用(配置: Any = None) -> bool:
     """_当前作用域配置()已配置运行状态数据库时才能持久化会话。"""
     数据库配置 = 配置 if 配置 is not None else _当前作用域配置()

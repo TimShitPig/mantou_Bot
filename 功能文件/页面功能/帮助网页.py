@@ -91,6 +91,7 @@ def _注册路由(app: web.Application) -> None:
     QQ阅读开放接口.注册路由(app, lambda: 后端.当前帮助网页配置)
     路由 = (
         ("get", "/", _处理帮助网页),
+        ("get", "/tutorial-images/{filename}", 后端._处理教程图片),
         ("post", "/api/login", 后端._处理控制台登录),
         ("post", "/api/logout", 后端._处理控制台退出),
         ("get", "/api/dashboard", 后端._处理控制台数据),
