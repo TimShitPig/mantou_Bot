@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import errno as errno_codes
 import hashlib
 import html
 import json
 import os
 from pathlib import Path
 import re
+import socket
+import ssl
 from typing import Any, AsyncIterator
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -40,12 +43,72 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 _平台同步调用 = 创建平台同步调用("少年梦")
 _平台缓存调用 = 创建平台缓存调用("少年梦", 文件缓存工具.删除小说缓存文件)
 _并发状态: dict[str, Any] = globals().get("_并发状态") or {}
+_少年梦正文恢复总时限 = 120.0
+_少年梦正文恢复退避 = (0.5, 1.0)
+_少年梦正文最多尝试 = 3
 
 
 class 少年梦请求错误(RuntimeError):
-    def __init__(self, category: str, *, http_status: int | None = None, code: int | None = None):
+    def __init__(self, category: str, *, http_status: int | None = None, code: int | None = None,
+                 network_type: str = "", request_stage: str = "", errno: int | None = None,
+                 retryable: bool = False, attempt: int = 1):
         super().__init__(category)
         self.category, self.http_status, self.code = category, http_status, code
+        self.network_type, self.request_stage = network_type, request_stage
+        self.errno, self.retryable, self.attempt = errno, retryable, attempt
+
+
+def _分类网络异常(exc: BaseException, *, request_stage: str, http_status: int | None = None) -> 少年梦请求错误:
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < 6 and all(current is not item for item in chain):
+        chain.append(current)
+        current = current.__cause__
+    names = {type(item).__name__ for item in chain}
+    os_error = next((item for item in chain if isinstance(item, OSError) and type(item.errno) is int), None)
+    number = os_error.errno if os_error is not None else None
+    transient_errno = {errno_codes.ECONNRESET, errno_codes.ECONNABORTED, errno_codes.ECONNREFUSED,
+                       errno_codes.ETIMEDOUT, errno_codes.EPIPE, errno_codes.ENETRESET,
+                       errno_codes.EHOSTUNREACH, errno_codes.ENETUNREACH}
+    category, retryable = "network_other", False
+    if any(isinstance(item, (aiohttp.ClientConnectorCertificateError, ssl.SSLCertVerificationError)) for item in chain):
+        category = "certificate_error"
+    elif any(isinstance(item, (aiohttp.ClientSSLError, ssl.SSLError, aiohttp.ServerFingerprintMismatch)) for item in chain):
+        category = "tls_error"
+    elif any(isinstance(item, socket.gaierror) for item in chain):
+        category = "dns_error"
+        retryable = number == socket.EAI_AGAIN
+    elif isinstance(exc, asyncio.TimeoutError):
+        category = ("connect_timeout" if "ConnectionTimeoutError" in names else
+                    "read_timeout" if "SocketTimeoutError" in names else
+                    "server_timeout" if isinstance(exc, aiohttp.ServerTimeoutError) else "total_timeout")
+        retryable = True
+    elif isinstance(exc, aiohttp.ClientPayloadError):
+        # 上游提前 EOF 与坏压缩/非法 chunk 使用同一异常外壳，只恢复已确认的中断。
+        incomplete = any(type(item).__name__ == "ContentLengthError" or (
+            type(item).__name__ == "TransferEncodingError" and
+            getattr(item, "message", None) == "Not enough data to satisfy transfer length header."
+        ) for item in chain[1:])
+        category, retryable = ("payload_incomplete", True) if incomplete else ("payload_error", False)
+        if number in transient_errno:
+            category, retryable = "connection_reset", True
+    elif isinstance(exc, aiohttp.ServerDisconnectedError):
+        category, retryable = "server_disconnected", True
+    elif number in transient_errno:
+        category, retryable = "connection_reset", True
+    elif isinstance(exc, aiohttp.ClientConnectorError):
+        category = "connection_failed"
+    elif isinstance(exc, aiohttp.ClientConnectionError):
+        category, retryable = "connection_closed", True
+    known_types = {"ClientConnectorCertificateError", "SSLCertVerificationError", "ClientConnectorSSLError",
+                   "ClientSSLError", "SSLError", "ServerFingerprintMismatch", "ClientConnectorDNSError",
+                   "ClientConnectorError", "ClientOSError", "ConnectionTimeoutError", "SocketTimeoutError",
+                   "ServerTimeoutError", "TimeoutError", "ServerDisconnectedError", "ClientPayloadError",
+                   "ClientConnectionError", "ServerConnectionError", "ConnectionResetError", "ConnectionAbortedError",
+                   "ConnectionRefusedError", "BrokenPipeError", "OSError", "gaierror"}
+    network_type = type(exc).__name__ if type(exc).__name__ in known_types else "OtherNetworkError"
+    return 少年梦请求错误(category, http_status=http_status, network_type=network_type,
+                          request_stage=request_stage, errno=number, retryable=retryable)
 
 
 class _搜索结果(list):
@@ -91,16 +154,21 @@ async def _请求(session: aiohttp.ClientSession, path: str, fields: dict[str, A
     loop = asyncio.get_running_loop()
     if _并发状态.get("loop") is not loop:
         _并发状态.update(loop=loop, semaphore=asyncio.Semaphore(少年梦并发数))
+    request_stage, http_status = "queue", None
     try:
         async with _并发状态["semaphore"]:
+            request_stage = "request"
             async with session.post(少年梦基础地址 + path, data=json.dumps(_签名(fields), ensure_ascii=False, separators=(",", ":")).encode("utf-8"), headers={"logintoken": token} if token else None, allow_redirects=False) as response:
+                http_status = response.status
                 if response.status != 200:
                     raise 少年梦请求错误("rate_limited" if response.status == 429 else "http_error", http_status=response.status)
+                request_stage = "read"
                 raw = bytearray()
                 async for chunk in response.content.iter_chunked(65536):
                     if len(raw) + len(chunk) > 少年梦响应大小上限:
                         raise 少年梦请求错误("response_too_large", http_status=200)
                     raw.extend(chunk)
+                request_stage = "parse"
                 try:
                     result = json.loads(raw.decode("utf-8-sig"))
                 except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
@@ -114,7 +182,31 @@ async def _请求(session: aiohttp.ClientSession, path: str, fields: dict[str, A
                     raise 少年梦请求错误("invalid_response", http_status=200)
                 return result["data"]
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
-        raise 少年梦请求错误("timeout" if isinstance(exc, asyncio.TimeoutError) else "network_error") from exc
+        raise _分类网络异常(exc, request_stage=request_stage, http_status=http_status) from None
+
+
+async def _请求少年梦草稿正文(session: aiohttp.ClientSession, fields: dict[str, Any], token: str) -> Any:
+    # 只重读原章节，不重放登录、草稿选择或其他接口；预算包含队列、请求与退避。
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _少年梦正文恢复总时限
+    for attempt in range(1, _少年梦正文最多尝试 + 1):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise 少年梦请求错误("total_timeout", network_type="TimeoutError", request_stage="budget", attempt=attempt)
+        try:
+            return await asyncio.wait_for(_请求(session, "/Author/getOneChapter", fields, token=token), timeout=remaining)
+        except asyncio.TimeoutError:
+            raise 少年梦请求错误("total_timeout", network_type="TimeoutError", request_stage="budget", attempt=attempt) from None
+        except 少年梦请求错误 as exc:
+            exc.attempt = attempt
+            if not exc.retryable or attempt == _少年梦正文最多尝试:
+                raise
+            delay = _少年梦正文恢复退避[attempt - 1]
+            if deadline - loop.time() <= delay:
+                raise 少年梦请求错误("total_timeout", network_type="TimeoutError", request_stage="budget", attempt=attempt) from None
+            logger.warning("少年梦正文瞬时请求恢复：stage=%s, attempt=%s, category=%s, network_type=%s, errno=%s, http_status=%s",
+                           exc.request_stage, attempt, exc.category, exc.network_type, exc.errno, exc.http_status)
+            await asyncio.sleep(delay)
 
 
 def 读取少年梦账号(config: Any) -> tuple[int, str]:
@@ -351,7 +443,7 @@ async def 获取少年梦详情(session: aiohttp.ClientSession, book_id: str) ->
 
 async def 获取少年梦草稿正文(session: aiohttp.ClientSession, account: tuple[int, str], draft_book_id: int, chapter_id: str, *, expected_book_id: str = "") -> tuple[str, str]:
     user_id, token = account
-    data = await _请求(session, "/Author/getOneChapter", {"UserID": user_id, "BookID": draft_book_id, "ChapterID": int(chapter_id)}, token=token)
+    data = await _请求少年梦草稿正文(session, {"UserID": user_id, "BookID": draft_book_id, "ChapterID": int(chapter_id)}, token)
     row = data.get("ChapterObj") if isinstance(data, dict) else None
     if not isinstance(row, dict) or _整数(row.get("id")) != int(chapter_id) or (expected_book_id and _整数(row.get("BookID")) != int(expected_book_id)):
         raise 少年梦请求错误("chapter_identity_mismatch")
@@ -482,5 +574,5 @@ async def 生成少年梦下载回复流(event: Any, source: str, config: Any = 
             return
         yield str(result["fallback_text"]) if result.get("fallback_text") else "文件发送失败，请稍后再试"
     except Exception as exc:
-        logger.warning("少年梦小说处理失败：stage=%s, error_type=%s, category=%s, http_status=%s, code=%s", stage, type(exc).__name__, getattr(exc, "category", "unknown"), getattr(exc, "http_status", None), getattr(exc, "code", None))
+        logger.warning("少年梦小说处理失败：stage=%s, error_type=%s, category=%s, network_type=%s, request_stage=%s, attempt=%s, errno=%s, http_status=%s, code=%s", stage, type(exc).__name__, getattr(exc, "category", "unknown"), getattr(exc, "network_type", ""), getattr(exc, "request_stage", ""), getattr(exc, "attempt", 1), getattr(exc, "errno", None), getattr(exc, "http_status", None), getattr(exc, "code", None))
         yield "文件发送失败，请稍后再试" if stage == "upload_send" else "下载失败 请重试"

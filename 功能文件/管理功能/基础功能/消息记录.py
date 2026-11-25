@@ -5701,7 +5701,7 @@ def 设置会话已读(会话标识: str, 类型: str = "group", appid: str = ""
 
 async def 获取群成员最近消息编号(
     会话标识: str, 用户标识: str, 当前消息: str, 上限: int = 30,
-    appid: str = "",
+    appid: str = "", *, 历史过滤: Any = None,
 ) -> list[str]:
     """合并接收缓存与持久化历史，触发消息固定占用一个名额。"""
     会话标识 = str(会话标识 or "").strip()
@@ -5710,12 +5710,23 @@ async def 获取群成员最近消息编号(
     if not 会话标识 or not 用户标识 or not 当前消息 or 是本地系统消息(当前消息):
         return []
     上限 = max(1, min(30, int(上限)))
-    会话 = 消息缓存.get(会话标识) or {}
-    appid = str(appid or 会话.get("appid") or "").strip()
+    if 历史过滤 is not None:
+        appid = str(appid or "").strip()
+        if not callable(历史过滤) or not re.fullmatch(r"[0-9]{4,32}", appid):
+            return []
+        数据库快照, 数据库键 = _群成员状态上下文()
+        会话 = _读取作用域会话缓存(会话标识, "group", appid)
+    else:
+        会话 = 消息缓存.get(会话标识) or {}
+        appid = str(appid or 会话.get("appid") or "").strip()
     缓存消息 = list(会话.get("messages") or [])
 
     def 完整编号(记录: dict[str, Any]) -> str:
         编号 = _规范消息ID(记录.get("message_id"))
+        if 历史过滤 is not None and (
+            not 编号 or len(编号) > 512 or any(not 33 <= ord(字符) <= 126 for 字符 in 编号)
+        ):
+            return ""
         if len(编号) == 128:
             if _消息存储 is None:
                 return ""
@@ -5730,8 +5741,8 @@ async def 获取群成员最近消息编号(
         return (
             not 是本地系统消息(记录.get("message_id"), 记录.get("source"))
             and str(记录.get("user_id") or "") == 用户标识
-            and str(记录.get("chat_type") or 会话.get("chat_type") or "") == "group"
-            and str(记录.get("_session") or 会话标识) == 会话标识
+            and str(记录.get("chat_type") or (会话.get("chat_type") if 历史过滤 is None else "") or "") == "group"
+            and str(记录.get("_session") or (会话标识 if 历史过滤 is None else "")) == 会话标识
             and (not appid or str(记录.get("appid") or "") == appid)
         )
 
@@ -5751,22 +5762,37 @@ async def 获取群成员最近消息编号(
     内存记录 = []
     已检查 = 0
     for 记录 in reversed(缓存消息):
-        if (not 当前作用域(记录) or 记录.get("is_self")
-                or str(记录.get("member_role") or "").lower() in {"owner", "admin", "群主", "管理员"}
+        if (not 当前作用域(记录) or (历史过滤 is None and (记录.get("is_self")
+                or str(记录.get("member_role") or "").lower() in {"owner", "admin", "群主", "管理员"}))
                 or int(记录.get("ts") or 0) > 截至时间):
             continue
         已检查 += 1
         编号 = 完整编号(记录)
+        if 历史过滤 is not None and not 编号:
+            return []
         if 编号:
-            内存记录.append({"message_id": 编号, "ts": int(记录.get("ts") or 0),
-                             "recalled": bool(记录.get("recalled"))})
+            项 = {"message_id": 编号, "ts": int(记录.get("ts") or 0),
+                  "recalled": bool(记录.get("recalled"))}
+            if 历史过滤 is not None:
+                项.update({字段: copy.deepcopy(记录.get(字段)) for 字段 in (
+                    "content", "raw_message", "appid", "_session", "chat_type", "user_id", "source", "member_role", "is_self",
+                )})
+            内存记录.append(项)
         if 已检查 >= 上限:
             break
     数据库记录 = []
     if _消息存储 is not None and _消息数据库已配置():
-        数据库记录 = await _异步执行消息记录同步(
-            _消息存储.读取群成员最近消息, 会话标识, 用户标识, 当前消息, 截至时间, 上限, appid,
-        )
+        if 历史过滤 is not None:
+            数据库记录 = await _异步执行消息记录同步(
+                _消息存储.执行数据库配置快照操作, 数据库快照,
+                partial(_消息存储.读取群成员最近消息, 会话标识, 用户标识, 当前消息, 截至时间, 上限, appid, 包含内容=True),
+            )
+            if 数据库记录 is None or _群成员状态上下文()[1] != 数据库键:
+                return []
+        else:
+            数据库记录 = await _异步执行消息记录同步(
+                _消息存储.读取群成员最近消息, 会话标识, 用户标识, 当前消息, 截至时间, 上限, appid,
+            )
     if not 缓存含触发消息:
         数据库触发记录 = next((记录 for 记录 in 数据库记录 if 记录["message_id"] == 当前消息), None)
         if 数据库触发记录 is not None:
@@ -5775,6 +5801,8 @@ async def 获取群成员最近消息编号(
     # 相同消息的撤回状态取并集；同秒时优先使用实时接收顺序。
     候选: dict[str, dict[str, Any]] = {}
     for 记录 in [*内存记录, *数据库记录]:
+        if 历史过滤 is not None and not 当前作用域(记录):
+            continue
         编号 = _规范消息ID(记录.get("message_id"))
         if not 编号 or 编号 == 当前消息 or 是本地系统消息(编号, 记录.get("source")):
             continue
@@ -5783,7 +5811,25 @@ async def 获取群成员最近消息编号(
         else:
             候选[编号] = dict(记录)
     最近记录 = sorted(候选.values(), key=lambda 记录: 记录["ts"], reverse=True)[:上限 - 1]
-    return [当前消息, *[记录["message_id"] for 记录 in 最近记录 if not 记录["recalled"]]]
+    if 历史过滤 is None:
+        return [当前消息, *[记录["message_id"] for 记录 in 最近记录 if not 记录["recalled"]]]
+    结果 = [当前消息]
+    for 记录 in 最近记录:
+        if (记录["recalled"] or 记录.get("is_self")
+                or str(记录.get("member_role") or "").lower() in {"owner", "admin", "群主", "管理员"}):
+            continue
+        原文, 内容 = 记录.get("raw_message"), 记录.get("content")
+        if (not isinstance(原文, str) or not 原文 or 原文.endswith("...[已截断]")
+                or not isinstance(内容, str)):
+            continue
+        try:
+            if len(原文.encode("utf-8")) > 65536 or len(内容.encode("utf-8")) > 65536 or not 历史过滤(记录):
+                continue
+        except Exception as 异常:
+            logger.debug("广告历史内容检查跳过：error_type=%s", type(异常).__name__)
+            continue
+        结果.append(记录["message_id"])
+    return 结果 if _群成员状态上下文()[1] == 数据库键 else []
 
 
 async def 获取群成员最近可撤回消息编号(

@@ -2654,15 +2654,17 @@ def 读取群成员最近可撤回候选(会话标识: str, 用户标识: str, a
 
 def 读取群成员最近消息(
     会话标识: str, 用户标识: str, 当前消息: str, 截至时间: int, 上限: int = 30,
-    appid: str = "",
-) -> list[dict[str, Any]]:
+    appid: str = "", *, 包含内容: bool = False,
+) -> list[dict[str, Any]] | None:
     """有界读取撤回身份；旧截断 ID 仅由同一行原文按需恢复并 CAS 写回。"""
-    if not 会话标识 or not 用户标识 or 是本地系统消息(当前消息) or not _MySQL可用():
+    if not 会话标识 or not 用户标识 or 是本地系统消息(当前消息):
         return []
+    if not _MySQL可用():
+        return None if 包含内容 else []
     appid = str(appid or "").strip()
     连接 = _打开连接()
     if 连接 is None:
-        return []
+        return None if 包含内容 else []
     try:
         with 连接.cursor() as 游标:
             范围条件 = "会话标识=%s AND user_id=%s AND 消息类型='group'"
@@ -2725,15 +2727,22 @@ def 读取群成员最近消息(
             锚点ID = int(_行字段(锚点, 3, "id", 默认值=0) or 0)
             锚点时间 = int(_行字段(锚点, 1, "ts", 默认值=截至时间) or 截至时间)
             时间上限 = min(截至时间, 锚点时间)
-            条件 = [范围条件, "is_self=0", "message_id<>''", "ts<=%s",
-                  "COALESCE(member_role,'') NOT IN ('owner','admin','群主','管理员')"]
+            条件 = [范围条件, "message_id<>''", "ts<=%s"]
+            if not 包含内容:
+                条件.insert(1, "is_self=0")
+                条件.append("COALESCE(member_role,'') NOT IN ('owner','admin','群主','管理员')")
             参数: list[Any] = [*范围参数, 时间上限]
             if 锚点ID:
                 条件.append("id<=%s")
                 参数.append(锚点ID)
             参数.append(max(1, min(30, int(上限))))
+            内容投影 = (
+                ",CASE WHEN OCTET_LENGTH(content)<=65536 THEN content ELSE NULL END AS content,"
+                "source,member_role,会话标识,user_id,消息类型,is_self"
+                if 包含内容 else ""
+            )
             游标.execute(
-                f"SELECT message_id,ts,recalled,id,appid,{原文投影} FROM `{消息记录表名}` WHERE "
+                f"SELECT message_id,ts,recalled,id,appid,{原文投影}{内容投影} FROM `{消息记录表名}` WHERE "
                 + " AND ".join(条件) + " ORDER BY ts DESC, id DESC LIMIT %s",
                 tuple(参数),
             )
@@ -2742,6 +2751,10 @@ def 读取群成员最近消息(
             for 行 in 行列表:
                 编号 = 完整编号(行)
                 if not 编号:
+                    if 包含内容:
+                        if 已修复:
+                            连接.commit()
+                        return None
                     continue
                 已撤回 = bool(_行字段(行, 2, "recalled", 默认值=False))
                 if 编号 in 结果:
@@ -2750,6 +2763,18 @@ def 读取群成员最近消息(
                     结果[编号] = {"message_id": 编号,
                                 "ts": int(_行字段(行, 1, "ts", 默认值=0) or 0),
                                 "recalled": 已撤回}
+                    if 包含内容:
+                        结果[编号].update({
+                            "raw_message": _行字段(行, 5, "raw_message", 默认值=""),
+                            "content": _行字段(行, 6, "content"),
+                            "source": _行字段(行, 7, "source", 默认值=""),
+                            "member_role": _行字段(行, 8, "member_role", 默认值=""),
+                            "_session": _行字段(行, 9, "会话标识", 默认值=""),
+                            "user_id": _行字段(行, 10, "user_id", 默认值=""),
+                            "chat_type": _行字段(行, 11, "消息类型", 默认值=""),
+                            "is_self": bool(_行字段(行, 12, "is_self", 默认值=False)),
+                            "appid": _行字段(行, 4, "appid", 默认值=""),
+                        })
             if 已修复:
                 连接.commit()
             return list(结果.values())
@@ -2762,7 +2787,7 @@ def 读取群成员最近消息(
             "群成员历史消息读取失败：group_id=%s, user_id=%s, error_type=%s",
             会话标识, 用户标识, type(exc).__name__,
         )
-        return []
+        return None if 包含内容 else []
     finally:
         _关闭连接(连接)
 

@@ -7,6 +7,8 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from functools import partial
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -57,20 +59,12 @@ QQ阅读小程序白名单规则 = re.compile(
     r"|(?:source|来源)\s*[:：=]\s*[\"']?QQ阅读.{0,2000}(?:微信小程序|小程序)",
     re.IGNORECASE | re.DOTALL,
 )
-卡片消息规则 = re.compile(
-    r"ComponentType\.(?:Json|Share|Contact)|\[卡片消息\]|暂不能查看该消息内容",
-    re.IGNORECASE,
-)
 At消息规则 = re.compile(
     r"\[At:[^\]]+\]|<@!?[A-Za-z0-9_-]{5,64}>|ComponentType\.At",
     re.IGNORECASE,
 )
-合并转发规则 = re.compile(
-    r"ComponentType\.(?:Forward|Node|Nodes)|群聊的聊天记录|查看\d+条转发消息|\[合并转发消息\]",
-    re.IGNORECASE,
-)
 闪传消息规则 = re.compile(
-    r"QQ闪传|该消息类型暂不支持查看|\[闪传(?:消息)?\]", re.IGNORECASE
+    r"^(?:QQ闪传|\[闪传(?:消息)?\])$", re.IGNORECASE
 )
 网盘分享广告链接规则 = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:https?://)?(?:pan\.quark\.cn|pan\.baidu\.com)"
@@ -1211,18 +1205,88 @@ async def QQ官方机器人具备群管权限(
 def 是否需要撤回消息(event: AstrMessageEvent, 消息文本: str = "") -> bool:
     if not 是QQ官方机器人(event):
         return False
+    return 是否命中广告撤回内容(event, 消息文本)
+
+
+def 是否命中广告撤回内容(event: Any, 消息文本: str = "") -> bool:
+    """仅判定本条可见内容，供现场事件与已核验身份的历史记录共用。"""
     if 是否At消息(event):
         return False
     if 是否网盘分享广告消息(event, 消息文本):
         return True
     if 是否白名单消息(event, 消息文本):
         return False
-    return (
-        是否群名片消息(event)
-        or 是否合并转发消息(event)
-        or 是否闪传消息(event)
-        or 是否需要撤回数字消息(消息文本)
-    )
+    if 是否群名片消息(event) or 是否合并转发消息(event) or 是否闪传消息(event):
+        return True
+    # JSON/Share及官方ARK都是通用卡片；其元信息和ID不充当数字正文。
+    if 是否普通分享卡片(event):
+        return False
+    return 是否需要撤回数字消息(消息文本)
+
+
+def 是否普通分享卡片(event: Any) -> bool:
+    消息对象 = 读取字段(event, "message_obj")
+    for 对象 in (event, 消息对象):
+        消息 = 读取字段(对象, "message")
+        消息段列表 = 消息 if isinstance(消息, (list, tuple)) else [消息]
+        if any(获取群管消息段类型(段) in {"json", "share", "unknown"} for 段 in 消息段列表):
+            return True
+        原始消息 = 读取字段(对象, "raw_message")
+        for 负载 in (对象, 原始消息, 读取字段(原始消息, "raw_data")):
+            if 包含QQ官方内容类型(负载, 3):
+                return True
+    return False
+
+
+def 历史消息仍需广告撤回(记录: Any, *, 群号: str, 用户标识: str, appid: str) -> bool:
+    """仅重判同一官方原文；缺失、截断、身份冲突及未知卡片均不联动。"""
+    if not isinstance(记录, dict) or (
+        记录.get("chat_type") != "group" or 记录.get("_session") != 群号
+        or 记录.get("user_id") != 用户标识 or 记录.get("appid") != appid
+        or 记录.get("source") != "qq_official" or 记录.get("is_self")
+        or 记录.get("member_role") in {"owner", "admin", "群主", "管理员"}
+    ):
+        return False
+    原文 = 记录.get("raw_message")
+    if not isinstance(原文, str) or not 原文.strip() or len(原文.encode("utf-8")) > 65536:
+        return False
+    try:
+        原始结构 = json.loads(原文)
+    except (ValueError, RecursionError):
+        return False
+    待检查 = [原始结构]
+    for _ in range(8):
+        if not 待检查:
+            break
+        负载 = 待检查.pop()
+        if not isinstance(负载, dict):
+            continue
+        for 字段 in ("d", "data", "raw_data", "payload"):
+            子结构 = 负载.get(字段)
+            if isinstance(子结构, dict):
+                待检查.append(子结构)
+        作者 = 负载.get("author")
+        if not isinstance(作者, dict):
+            continue
+        原编号 = 负载.get("id") or 负载.get("message_id")
+        原群号 = 负载.get("group_openid")
+        原用户 = 作者.get("member_openid") or 作者.get("id")
+        原应用 = 负载.get("appid", 负载.get("app_id"))
+        if (原编号 != 记录.get("message_id") or 原群号 != 群号 or 原用户 != 用户标识
+                or (原应用 is not None and 原应用 != appid)
+                or 作者.get("member_role") != "member" or 作者.get("bot") is True):
+            continue
+        文本 = 负载.get("content")
+        文本 = 文本 if isinstance(文本, str) else ""
+        消息段 = 负载.get("message")
+        历史事件 = SimpleNamespace(
+            message_str=文本,
+            message_obj=SimpleNamespace(
+                message=消息段 if isinstance(消息段, (list, tuple)) else [], raw_message=负载,
+            ),
+        )
+        return 是否命中广告撤回内容(历史事件, 文本)
+    return False
 
 
 def 是否需要撤回数字消息(消息文本: str) -> bool:
@@ -1279,15 +1343,19 @@ def 是否白名单消息(event: AstrMessageEvent, 消息文本: str = "") -> bo
 
 
 def 是否群名片消息(event: AstrMessageEvent) -> bool:
-    for 文本 in 获取原始文本候选(event):
-        if 卡片消息规则.search(文本):
-            return True
-
     消息对象 = getattr(event, "message_obj", None)
+    已记录诊断 = False
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
-        if 包含群名片消息段(消息) or 包含卡片标记(消息):
+        if 包含群名片消息段(消息):
             return True
+        if not 已记录诊断:
+            消息段列表 = 消息 if isinstance(消息, (list, tuple)) else [消息]
+            for 索引, 消息段 in enumerate(消息段列表):
+                if 获取群管消息段类型(消息段) in {"json", "share", "contact", "unknown"}:
+                    logger.debug("群名片识别跳过：category=unconfirmed_card, segment_index=%s", 索引)
+                    已记录诊断 = True
+                    break
     return False
 
 
@@ -1301,20 +1369,16 @@ def 是否合并转发消息(event: AstrMessageEvent) -> bool:
     if any(包含QQ官方聊天记录类型(对象) for 对象 in 官方消息候选):
         return True
 
-    for 文本 in 获取原始文本候选(event):
-        if 合并转发规则.search(文本):
-            return True
-
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
-        if 包含合并转发消息段(消息) or 包含合并转发标记(消息):
+        if 包含合并转发消息段(消息):
             return True
     return False
 
 
 def 是否闪传消息(event: AstrMessageEvent) -> bool:
     for 文本 in 获取原始文本候选(event):
-        if 闪传消息规则.search(文本):
+        if 闪传消息规则.fullmatch(文本.strip()):
             return True
 
     消息对象 = getattr(event, "message_obj", None)
@@ -1327,7 +1391,7 @@ def 是否闪传消息(event: AstrMessageEvent) -> bool:
 
 def 获取卡片撤回类型(event: AstrMessageEvent) -> str:
     if 是否群名片消息(event):
-        return "群名片/JSON卡片"
+        return "群名片"
     if 是否合并转发消息(event):
         return "合并转发"
     if 是否闪传消息(event):
@@ -1344,7 +1408,7 @@ def 是否At消息(event: AstrMessageEvent) -> bool:
     消息对象 = getattr(event, "message_obj", None)
     for 对象 in (消息对象, event):
         消息 = 读取字段(对象, "message")
-        if 包含At消息段(消息) or 包含At对象标记(消息):
+        if 包含At消息段(消息):
             return True
     return False
 
@@ -1363,19 +1427,19 @@ def 获取原始文本候选(event: AstrMessageEvent) -> list[str]:
 
 
 def 包含群名片消息段(消息: Any) -> bool:
-    if isinstance(消息, list):
+    if isinstance(消息, (list, tuple)):
         return any(是否群名片消息段(消息段) for 消息段 in 消息)
     return 是否群名片消息段(消息)
 
 
 def 包含At消息段(消息: Any) -> bool:
-    if isinstance(消息, list):
+    if isinstance(消息, (list, tuple)):
         return any(是否At消息段(消息段) for 消息段 in 消息)
     return 是否At消息段(消息)
 
 
 def 包含合并转发消息段(消息: Any) -> bool:
-    if isinstance(消息, list):
+    if isinstance(消息, (list, tuple)):
         return any(是否合并转发消息段(消息段) for 消息段 in 消息)
     return 是否合并转发消息段(消息)
 
@@ -1394,22 +1458,33 @@ def 是否合并转发消息段(消息段: Any) -> bool:
 
 def 包含QQ官方聊天记录类型(对象: Any) -> bool:
     """只读取官方群消息结构中的聊天记录类型，避免普通数字误触发。"""
+    return 包含QQ官方内容类型(对象, 102)
+
+
+def 包含QQ官方内容类型(对象: Any, 类型编号: int) -> bool:
+    """只沿官方原文及当前消息元素判断；引用内容不作为当前消息。"""
     待检查 = [对象]
     已检查: set[int] = set()
     while 待检查:
         当前对象 = 待检查.pop()
         if 当前对象 is None:
             continue
+        标识 = id(当前对象)
+        if 标识 in 已检查:
+            continue
+        已检查.add(标识)
         if isinstance(当前对象, (list, tuple, set)):
             待检查.extend(当前对象)
             continue
-        if isinstance(当前对象, (dict, str, bytes, bytearray)):
-            标识 = id(当前对象)
-            if 标识 in 已检查:
-                continue
-            已检查.add(标识)
-        if 是否QQ官方聊天记录类型值(读取字段(当前对象, "message_type")):
+        消息类型 = 读取字段(当前对象, "message_type")
+        if (type(消息类型) is int and 消息类型 == 类型编号) or (
+            isinstance(消息类型, str) and 消息类型.strip() == str(类型编号)
+        ):
             return True
+        if (type(消息类型) is int and 消息类型 == 103) or (
+            isinstance(消息类型, str) and 消息类型.strip() == "103"
+        ):
+            continue
         for 字段名 in ("msg_elements", "raw_data"):
             子对象 = 读取字段(当前对象, 字段名)
             if 子对象 is not None:
@@ -1418,44 +1493,18 @@ def 包含QQ官方聊天记录类型(对象: Any) -> bool:
 
 
 def 是否QQ官方聊天记录类型值(值: Any) -> bool:
-    if isinstance(值, bool):
-        return False
-    try:
-        return int(str(值).strip()) == 102
-    except (TypeError, ValueError):
-        return False
-
-
-def 包含At对象标记(值: Any) -> bool:
-    if 值 is None:
-        return False
-    if isinstance(值, (list, tuple, set)):
-        return any(包含At对象标记(子值) for 子值 in 值)
-    if isinstance(值, dict):
-        return 是否At消息段(值) or any(包含At对象标记(子值) for 子值 in 值.values())
-    return bool(At消息规则.search(str(值)))
-
-
-def 包含合并转发标记(值: Any) -> bool:
-    if 值 is None:
-        return False
-    if isinstance(值, (list, tuple, set)):
-        return any(包含合并转发标记(子值) for 子值 in 值)
-    if isinstance(值, dict):
-        return 是否合并转发消息段(值) or any(
-            包含合并转发标记(子值) for 子值 in 值.values()
-        )
-    return bool(合并转发规则.search(str(值)))
+    return (type(值) is int and 值 == 102) or (isinstance(值, str) and 值.strip() == "102")
 
 
 def 包含闪传标记(值: Any) -> bool:
-    if 值 is None:
-        return False
-    if isinstance(值, (list, tuple, set)):
+    """只读取真实文本段，不把卡片字段、ID或对象表示当闪传类型。"""
+    if isinstance(值, (list, tuple)):
         return any(包含闪传标记(子值) for 子值 in 值)
-    if isinstance(值, dict):
-        return any(包含闪传标记(子值) for 子值 in 值.values())
-    return bool(闪传消息规则.search(str(值)))
+    if 获取群管消息段类型(值) not in {"plain", "text"}:
+        return False
+    数据 = 读取字段(值, "data")
+    文本 = 数据.get("text") if isinstance(数据, dict) else 读取字段(值, "text")
+    return isinstance(文本, str) and bool(闪传消息规则.fullmatch(文本.strip()))
 
 
 def 包含白名单域名(值: Any) -> bool:
@@ -1465,7 +1514,13 @@ def 包含白名单域名(值: Any) -> bool:
         return any(包含白名单域名(子值) for 子值 in 值)
     if isinstance(值, dict):
         return any(包含白名单域名(子值) for 子值 in 值.values())
-    当前文本 = str(值).replace("\\/", "/")
+    if not isinstance(值, str):
+        return any(
+            包含白名单域名(子值)
+            for 字段 in ("data", "text", "url", "title", "content")
+            if (子值 := 读取字段(值, 字段)) is not None and 子值 is not 值
+        )
+    当前文本 = 值.replace("\\/", "/")
     for _ in range(3):
         if 白名单域名规则.search(当前文本):
             return True
@@ -1473,8 +1528,7 @@ def 包含白名单域名(值: Any) -> bool:
         if 解码文本 == 当前文本:
             break
         当前文本 = 解码文本
-    数据 = 读取字段(值, "data")
-    return 数据 is not None and 数据 is not 值 and 包含白名单域名(数据)
+    return False
 
 
 def 包含网盘分享广告链接(值: Any) -> bool:
@@ -1484,7 +1538,13 @@ def 包含网盘分享广告链接(值: Any) -> bool:
         return any(包含网盘分享广告链接(子值) for 子值 in 值)
     if isinstance(值, dict):
         return any(包含网盘分享广告链接(子值) for 子值 in 值.values())
-    当前文本 = str(值).replace("\\/", "/")
+    if not isinstance(值, str):
+        return any(
+            包含网盘分享广告链接(子值)
+            for 字段 in ("data", "text", "url", "title", "content")
+            if (子值 := 读取字段(值, 字段)) is not None and 子值 is not 值
+        )
+    当前文本 = 值.replace("\\/", "/")
     for _ in range(3):
         if 网盘分享广告链接规则.search(当前文本):
             return True
@@ -1492,8 +1552,7 @@ def 包含网盘分享广告链接(值: Any) -> bool:
         if 解码文本 == 当前文本:
             break
         当前文本 = 解码文本
-    数据 = 读取字段(值, "data")
-    return 数据 is not None and 数据 is not 值 and 包含网盘分享广告链接(数据)
+    return False
 
 
 def 包含QQ阅读小程序白名单(值: Any) -> bool:
@@ -1503,7 +1562,7 @@ def 包含QQ阅读小程序白名单(值: Any) -> bool:
     if isinstance(值, (list, tuple, set)):
         return any(包含QQ阅读小程序白名单(子值) for 子值 in 值)
     if isinstance(值, dict):
-        小写字段 = {str(键).lower(): 子值 for 键, 子值 in 值.items()}
+        小写字段 = {键.lower(): 子值 for 键, 子值 in 值.items() if isinstance(键, str)}
         来源值 = next(
             (
                 小写字段.get(键)
@@ -1512,10 +1571,10 @@ def 包含QQ阅读小程序白名单(值: Any) -> bool:
             ),
             None,
         )
-        来源文本 = re.sub(r"\s+", "", str(来源值 or "")).strip("\"'")
+        来源文本 = re.sub(r"\s+", "", 来源值 if isinstance(来源值, str) else "").strip("\"'")
         if 来源文本 == "QQ阅读":
             卡片字段文本 = " ".join(
-                str(小写字段.get(键) or "")
+                小写字段[键]
                 for 键 in (
                     "type",
                     "tag",
@@ -1527,75 +1586,62 @@ def 包含QQ阅读小程序白名单(值: Any) -> bool:
                     "app_name",
                     "appname",
                 )
+                if isinstance(小写字段.get(键), str)
             ).lower()
             if (
                 "小程序" in 卡片字段文本
                 or "miniapp" in 卡片字段文本
                 or "wechat" in 卡片字段文本
-                or str(小写字段.get("type") or "").lower() in {"json", "share"}
+                or (isinstance(小写字段.get("type"), str) and 小写字段["type"].lower() in {"json", "share"})
             ):
                 return True
         return any(包含QQ阅读小程序白名单(子值) for 子值 in 值.values())
-    return bool(QQ阅读小程序白名单规则.search(str(值)))
+    if isinstance(值, str):
+        return bool(QQ阅读小程序白名单规则.search(值))
+    数据 = 读取字段(值, "data")
+    return 数据 is not None and 数据 is not 值 and 包含QQ阅读小程序白名单(数据)
 
 
 def 是否At类型值(值: Any) -> bool:
     for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
-        if 候选 is None:
+        if not isinstance(候选, str):
             continue
-        文本 = str(候选).strip().lower()
-        if 文本 == "at" or 文本.endswith(".at") or "componenttype.at" in 文本:
+        文本 = 候选.strip().lower()
+        if 文本 in {"at", "componenttype.at"}:
             return True
     return False
 
 
 def 是否合并转发类型值(值: Any) -> bool:
     for 候选 in (值, 读取字段(值, "value"), 读取字段(值, "name")):
-        if 候选 is None:
+        if not isinstance(候选, str):
             continue
-        文本 = str(候选).strip().lower()
-        if 文本 in ("forward", "node", "nodes") or 文本.endswith(
-            (".forward", ".node", ".nodes")
-        ):
-            return True
-        if any(
-            标记 in 文本
-            for 标记 in (
-                "componenttype.forward",
-                "componenttype.node",
-                "componenttype.nodes",
-            )
-        ):
+        文本 = 候选.strip().lower()
+        if 文本 in {"forward", "node", "nodes", "componenttype.forward", "componenttype.node", "componenttype.nodes"}:
             return True
     return False
 
 
+def 获取群管消息段类型(消息段: Any) -> str:
+    值 = 读取字段(消息段, "type")
+    for 候选 in (值, 读取字段(值, "value")):
+        if isinstance(候选, str):
+            return 候选.strip().lower().removeprefix("componenttype.")
+    return ""
+
+
 def 是否群名片消息段(消息段: Any) -> bool:
-    if not isinstance(消息段, dict):
+    if 获取群管消息段类型(消息段) != "contact":
         return False
-    if 消息段.get("type") == "json":
-        return True
-    if 消息段.get("type") != "contact":
-        return False
-    数据 = 消息段.get("data")
-    if not isinstance(数据, dict):
-        return False
-    return str(数据.get("type") or "").lower() in ("group", "qq_group")
-
-
-def 包含卡片标记(值: Any) -> bool:
-    if 值 is None:
-        return False
-    if isinstance(值, list):
-        return any(包含卡片标记(子值) for 子值 in 值)
-    if isinstance(值, dict):
-        return any(包含卡片标记(子值) for 子值 in 值.values())
-    return bool(卡片消息规则.search(str(值)))
+    数据 = 读取字段(消息段, "data")
+    群类型 = 数据.get("type") if isinstance(数据, dict) else 读取字段(消息段, "_type")
+    return isinstance(群类型, str) and 群类型.strip().lower() in {"group", "qq_group"}
 
 
 def 获取消息文本(event: AstrMessageEvent) -> str:
     候选文本: list[str] = []
-    事件文本 = 清理可见文本(str(getattr(event, "message_str", "") or ""))
+    原事件文本 = getattr(event, "message_str", "")
+    事件文本 = 清理可见文本(原事件文本) if isinstance(原事件文本, str) else ""
     if 事件文本:
         候选文本.append(事件文本)
     消息对象 = getattr(event, "message_obj", None)
@@ -1669,6 +1715,7 @@ async def 尝试撤回广告历史消息(event: AstrMessageEvent) -> None:
         消息编号列表 = await 消息记录.获取群成员最近消息编号(
             群号, 用户标识, 当前消息, 广告联动撤回上限,
             appid=appid,
+            历史过滤=partial(历史消息仍需广告撤回, 群号=群号, 用户标识=用户标识, appid=appid),
         )
     except Exception as exc:
         logger.warning(
@@ -1837,14 +1884,11 @@ def 清理可见文本(文本: str) -> str:
 
 
 def 转消息段文本(消息段: Any) -> str:
-    if not isinstance(消息段, dict):
+    if 获取群管消息段类型(消息段) not in {"text", "plain"}:
         return ""
-    if 消息段.get("type") != "text":
-        return ""
-    数据 = 消息段.get("data")
-    if isinstance(数据, dict):
-        return str(数据.get("text") or "")
-    return ""
+    数据 = 读取字段(消息段, "data")
+    文本 = 数据.get("text") if isinstance(数据, dict) else 读取字段(消息段, "text")
+    return 文本 if isinstance(文本, str) else ""
 
 
 class QQ官方撤回错误(RuntimeError):
