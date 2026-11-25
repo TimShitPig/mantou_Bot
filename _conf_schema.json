@@ -194,7 +194,7 @@
       "shaoniandream_session": {
         "description": "少年梦登录会话 JSON",
         "type": "string",
-        "hint": "在登录保护的插件后台粘贴当前账号的登录结果或会话 JSON，只保存用户 ID 和 logintoken；按机器人隔离，只写入、不回显，留空保留。已有草稿作品 ID 由接口自动获取。",
+        "hint": "在登录保护的插件后台用手机号密码登录，密码仅本次使用、不保存；也可粘贴已有登录结果或会话 JSON。仅保存用户 ID 和 logintoken，按机器人隔离，只写入、不回显，留空保留。已有草稿作品 ID 由接口自动获取。",
         "default": "",
         "invisible": true
       }

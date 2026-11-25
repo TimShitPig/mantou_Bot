@@ -101,6 +101,7 @@ def _注册路由(app: web.Application) -> None:
         ("post", "/api/pan-enable", 后端._处理网盘开关),
         ("get", "/api/config", 后端._处理插件配置数据),
         ("post", "/api/config", 后端._处理插件配置写入),
+        ("post", "/api/shaoniandream/login", 后端._处理少年梦账号登录),
         ("post", "/api/qq-reader-api/keys", 后端._处理QQ阅读API密钥),
         ("post", 保存密码路由, 控制台密码.处理保存密码),
         ("post", "/api/database/test", 后端._处理数据库连接测试),

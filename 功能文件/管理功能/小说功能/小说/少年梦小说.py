@@ -31,6 +31,7 @@ from 功能文件.管理功能.小说功能.功能.文本处理 import 去除章
 少年梦签名KEY = '87ac02d392a8d3566fe7748c8de00af3'
 少年梦签名SECRET = '57dcuidu8aa8062bfe8042ea65310669'
 少年梦接口路径 = {
+    "/Login/login",
     "/Booklibrary/index", "/Booklibrary/bookdetail", "/Booklibrary/readdir",
     "/Author/managerbooks", "/Author/tmpchapter", "/Author/getOneChapter",
 }
@@ -107,7 +108,7 @@ async def _请求(session: aiohttp.ClientSession, path: str, fields: dict[str, A
                 if not isinstance(result, dict):
                     raise 少年梦请求错误("invalid_response", http_status=200)
                 code = _整数(result.get("status"))
-                if code != 1:
+                if code != 1 or (path == "/Login/login" and type(result.get("status")) is not int):
                     raise 少年梦请求错误("business_error", http_status=200, code=code)
                 if "data" not in result:
                     raise 少年梦请求错误("invalid_response", http_status=200)
@@ -128,6 +129,10 @@ def 读取少年梦账号(config: Any) -> tuple[int, str]:
         profile = profiles.get(appid) if isinstance(profiles, dict) else None
         settings = profile.get("shaoniandream_settings") if isinstance(profile, dict) else None
     value = settings.get("shaoniandream_session") if isinstance(settings, dict) else None
+    return _解析少年梦会话(value)
+
+
+def _解析少年梦会话(value: Any) -> tuple[int, str]:
     if not isinstance(value, str) or not value.strip() or len(value) > 20000:
         raise 少年梦请求错误("account_missing")
     try:
@@ -146,6 +151,22 @@ def 读取少年梦账号(config: Any) -> tuple[int, str]:
     if not isinstance(token, str) or not token.strip() or len(token) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in token):
         raise 少年梦请求错误("invalid_account")
     return data["id"], token
+
+
+async def 登录少年梦账号(phone: str, password: str) -> str:
+    """提交一次官方登录，仅返回可保存的最小会话，密码不落盘。"""
+    if not isinstance(phone, str) or re.fullmatch(r"[0-9]{11}", phone) is None:
+        raise 少年梦请求错误("invalid_login_input")
+    if not isinstance(password, str) or not password or len(password) > 1024:
+        raise 少年梦请求错误("invalid_login_input")
+    async with 创建少年梦HTTP会话() as session:
+        data = await _请求(session, "/Login/login", {"phone": phone, "password": password})
+    # 登录响应只允许用户对象，不能把其他嵌套响应当作成功账号。
+    if not isinstance(data, dict):
+        raise 少年梦请求错误("invalid_account")
+    value = json.dumps({"id": data.get("id"), "logintoken": data.get("logintoken")}, ensure_ascii=False, separators=(",", ":"))
+    _解析少年梦会话(value)
+    return value
 
 
 async def 自动获取少年梦草稿BookID(session: aiohttp.ClientSession, account: tuple[int, str]) -> int:

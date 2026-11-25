@@ -328,7 +328,7 @@
         if (next !== previousView) { closeMsgHeadMenu(); clearSavedCredential(); }
         setMessagesWorkspace(next === 'messages');
         if (previousView === 'pans' && next !== 'pans') void stopQuarkWebScan();
-        if (previousView === 'bot' && next !== 'bot') { leaveQQReader(); leaveJinjiang(); leaveSTV(); stopZLibraryAccount(); }
+        if (previousView === 'bot' && next !== 'bot') { clearShaoniandreamLogin(); leaveQQReader(); leaveJinjiang(); leaveSTV(); stopZLibraryAccount(); }
         activeView = next;
         if (next === 'bot') { void loadZLibraryAccount(); syncJinjiangTab(); syncSTVTab(); }
         if (push) { const nextParams = new URLSearchParams(location.search); nextParams.set('view', next); nextParams.set('appid', consoleAppid); history.pushState({view:next,appid:consoleAppid}, '', `${location.pathname}?${nextParams.toString()}`); }
@@ -375,6 +375,56 @@
       let savedCredentialView = null;
       let readerApiKeyGeneration = 0;
       const configSaves = new WeakSet();
+      const shaoniandreamLoginState = {generation:0, abort:null, busy:false};
+      const clearShaoniandreamLogin = () => {
+        const state = shaoniandreamLoginState;
+        state.generation += 1; state.abort?.abort(); state.abort = null; state.busy = false;
+        document.querySelectorAll('[data-shaoniandream-phone], [data-shaoniandream-password]').forEach((input) => { input.value = ''; input.disabled = false; });
+        document.querySelectorAll('[data-shaoniandream-submit]').forEach((button) => { button.disabled = false; button.textContent = '登录'; });
+        document.querySelectorAll('[data-shaoniandream-message]').forEach((message) => { message.textContent = ''; message.className = 'config-message'; });
+      };
+      const renderShaoniandreamLogin = (editable) => editable ? `<details data-shaoniandream-login open><summary>手机号登录</summary><div class="config-fields"><div class="config-field"><label for="shaoniandream-phone">手机号</label><input id="shaoniandream-phone" data-shaoniandream-phone type="tel" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="手机号"></div><div class="config-field"><label for="shaoniandream-password">密码</label><input id="shaoniandream-password" data-shaoniandream-password type="password" autocomplete="off" placeholder="密码"></div></div><div class="config-actions"><button class="primary-button" type="button" data-shaoniandream-submit>登录</button><span class="config-message" data-shaoniandream-message role="status" aria-live="polite"></span></div></details>` : '';
+      const submitShaoniandreamLogin = async (panel) => {
+        const state = shaoniandreamLoginState;
+        const phoneInput = panel.querySelector('[data-shaoniandream-phone]');
+        const passwordInput = panel.querySelector('[data-shaoniandream-password]');
+        const button = panel.querySelector('[data-shaoniandream-submit]');
+        const message = panel.querySelector('[data-shaoniandream-message]');
+        if (state.busy || !button || button.disabled || !panel.isConnected || !panel.open || activeView !== 'bot' || $('config')?.hidden || !consoleAppid) return;
+        const phone = phoneInput.value.trim(), password = passwordInput.value;
+        if (!/^1\d{10}$/.test(phone)) { message.textContent = '请输入正确的手机号'; message.className = 'config-message error'; return; }
+        if (!password) { message.textContent = '请输入密码'; message.className = 'config-message error'; return; }
+        const generation = ++state.generation, scope = consoleGeneration, appid = consoleAppid;
+        const controller = new AbortController(); state.abort = controller; state.busy = true;
+        button.disabled = true; button.textContent = '登录中…'; phoneInput.disabled = true; passwordInput.disabled = true;
+        passwordInput.value = ''; message.textContent = ''; message.className = 'config-message';
+        const isCurrent = () => generation === state.generation && scope === consoleGeneration && appid === consoleAppid && activeView === 'bot' && !$('config')?.hidden && panel.isConnected && panel.open;
+        try {
+          await api('shaoniandream/login', {method:'POST', body:JSON.stringify({phone, password}), botAppid:appid, signal:controller.signal});
+          if (!isCurrent()) return;
+          phoneInput.value = ''; passwordInput.value = '';
+          const field = snapshot?.config?.fields?.find((item) => item.key === 'shaoniandream_session');
+          if (field) field.configured = true;
+          const savedInput = $('cfg-shaoniandream_session');
+          if (savedInput) { savedInput.value = ''; savedInput.placeholder = '已配置，留空表示不修改'; const hint = savedInput.closest('.config-field')?.querySelector('small'); if (hint) hint.textContent = '已配置，留空表示不修改'; }
+          message.textContent = '登录成功'; message.className = 'config-message ok';
+        } catch (error) {
+          if (!isCurrent()) return;
+          if (error.status === 401) showAuthError(error);
+          message.textContent = '登录失败，请稍后重试'; message.className = 'config-message error';
+        } finally {
+          if (generation === state.generation) { state.abort = null; state.busy = false; }
+          if (isCurrent()) { button.disabled = false; button.textContent = '登录'; phoneInput.disabled = false; passwordInput.disabled = false; passwordInput.value = ''; }
+        }
+      };
+      const bindShaoniandreamLogin = (editor) => {
+        const panel = editor.querySelector('[data-shaoniandream-login]');
+        if (!panel) return;
+        panel.querySelector('[data-shaoniandream-submit]').addEventListener('click', () => void submitShaoniandreamLogin(panel));
+        panel.addEventListener('toggle', () => { if (!panel.open) clearShaoniandreamLogin(); });
+        panel.querySelectorAll('[data-shaoniandream-phone], [data-shaoniandream-password]').forEach((input) => input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void submitShaoniandreamLogin(panel); } }));
+      };
+      window.addEventListener('pagehide', clearShaoniandreamLogin);
 
       const updateCredentialToggle = (button, visible) => {
         button.textContent = visible ? '隐藏' : '显示';
@@ -443,6 +493,8 @@
       window.addEventListener('pagehide', clearSavedCredential);
       const botTabs = document.querySelector('.studio-bot-tabs');
       botTabs?.addEventListener('click', clearSavedCredential);
+      botTabs?.addEventListener('click', clearShaoniandreamLogin);
+      botTabs?.addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) clearShaoniandreamLogin(); });
       botTabs?.addEventListener('keydown', (event) => {
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) clearSavedCredential();
       });
@@ -569,6 +621,7 @@
       const renderConfigEditor = (targetId, fields, editable, filter) => {
         const node = $(targetId);
         if (!node) return;
+        if (targetId === 'basic-config-editor') clearShaoniandreamLogin();
         if (savedCredentialView && node.contains(savedCredentialView.input)) clearSavedCredential();
         const selected = (fields || []).filter((field) => {
           if (filter && !filter(field)) return false;
@@ -586,7 +639,7 @@
         });
         if (!groups.length) { node.innerHTML = '<div class="empty">暂无可编辑配置</div>'; return; }
         node.innerHTML = targetId === 'qq-reader-api-config-editor' ? renderReaderApiConfig(selected, editable)
-          : groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3><div class="config-fields">${groupFields.map((field) => {
+          : groups.map(([category, groupFields]) => `<section class="config-group" data-config-category="${esc(category)}"><h3>${esc(groupFields[0].category_name || category)}</h3>${category === 'shaoniandream_settings' ? renderShaoniandreamLogin(editable) : ''}<div class="config-fields">${groupFields.map((field) => {
           const inputId = `cfg-${field.key}`;
           const label = esc(field.label || field.key) + (field.scope ? `<span class="config-scope-label">${field.scope === 'shared' ? '服务共用' : '当前机器人'}</span>` : '');
           const hint = field.secret ? (field.configured ? '已配置，留空表示不修改' : (field.hint || '敏感值只写入，不在页面回显')) : String(field.hint || '');
@@ -612,6 +665,7 @@
           return `<div class="config-field"><label for="${inputId}">${label}</label><div class="config-input-wrap">${input}${savedValue}${toggle}</div><small>${hint}</small></div>`;
         }).join('')}</div></section>`).join('') + `<div class="config-actions"><button class="primary-button" type="button" data-config-save ${editable ? '' : 'disabled'}>${targetId === 'zlibrary-registration-config-editor' ? '保存注册设置' : '保存配置'}</button>${targetId === 'database-config-editor' ? `<button class="outline-button" type="button" data-database-test ${editable ? '' : 'disabled'}>测试当前连接</button>` : ''}<span class="config-message" data-config-message role="status" aria-live="polite"></span></div>${targetId === 'database-config-editor' ? '<div class="database-test-result" data-database-test-result role="status" aria-live="polite" hidden></div>' : ''}`;
         bindAdminListEditor(node, editable);
+        bindShaoniandreamLogin(node);
         if (targetId === 'database-config-editor') 整理数据库连接表单(node);
         node.querySelectorAll('[data-api-key-generate], [data-api-key-delete]').forEach((button) => {
           button.addEventListener('click', () => manageReaderApiKey(node, button));
@@ -1027,7 +1081,7 @@
         $('runtime-cpu').textContent = server.cpu || '--'; $('runtime-memory').textContent = server.memory || '--'; $('runtime-disk').textContent = server.disk || '--'; $('runtime-runtime').textContent = server.runtime || '--'; $('runtime-os').textContent = server.os || '--'; $('runtime-db').textContent = database.status || '--'; $('runtime-version').textContent = `v${data.version || '--'}`;
         const configList = $('config-list'); if (configList) configList.innerHTML = `<div class="config-item"><span>监听地址</span><strong>${esc(server.listen || '--')}</strong></div><div class="config-item"><span>访问地址</span><strong title="${esc(server.address)}">${esc(server.address || '--')}</strong></div><div class="config-item"><span>域名模式</span><strong>${data.config && data.config.custom_domain ? '自定义域名' : '自动服务器 IP'}</strong></div><div class="config-item"><span>登录方式</span><strong>${esc(data.config && data.config.auth_mode || '账号密码会话')}</strong></div>`;
         const configFields = data.config && data.config.fields || [];
-        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings'].includes(field.category));
+        renderConfigEditor('basic-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => ['basic_settings', 'help_web_settings', 'shaoniandream_settings'].includes(field.category));
         renderConfigEditor('zlibrary-registration-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'zlibrary_account_settings');
         renderConfigEditor('qq-reader-api-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'qq_reader_api_settings');
         renderConfigEditor('database-config-editor', configFields, Boolean(data.config && data.config.editable), (field) => field.category === 'database_settings');
@@ -2522,7 +2576,7 @@
       const changeNovel = async (node) => { if (!snapshot || !snapshot.novels.editable) return toast('数据库未配置，开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { await api('novel-switch', {method:'POST', body:JSON.stringify({key:node.dataset.switch, enabled})}); toast('小说开关已更新'); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
        const changePanEnabled = async (key, node) => { if (!snapshot || !snapshot.pans.editable) return toast('数据库未配置，网盘开关不能保存'); const enabled = node.dataset.enabled !== 'true'; node.disabled = true; try { const result = await api('pan-enable', {method:'POST', body:JSON.stringify({key, enabled})}); toast(result.message || `网盘${enabled ? '已开启' : '已关闭'}`); await load(); } catch (error) { node.disabled = false; if (error.status === 401) showAuthError(error); else toast(error.message); } };
       const load = async () => { if (!consoleAppid) return loadBotProfile(); try { render(await api('dashboard')); void loadBotProfile(); if ($('popover-logout')) $('popover-logout').hidden = false; setView(viewFromUrl(), false); } catch (error) { showAuthError(error); } };
-      $('popover-logout').addEventListener('click', async () => { leaveQQReader(); leaveJinjiang(); leaveSTV(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
+      $('popover-logout').addEventListener('click', async () => { clearShaoniandreamLogin(); leaveQQReader(); leaveJinjiang(); leaveSTV(); try { await api('logout', {method:'POST'}); } finally { location.reload(); } });
       document.querySelectorAll('[data-view]').forEach((node) => node.addEventListener('click', (event) => { event.preventDefault(); setView(node.dataset.view); }));
       window.addEventListener('popstate', () => {
         const appid = String(new URLSearchParams(location.search).get('appid') || '').trim();
@@ -3759,6 +3813,7 @@
       };
       const exitBotConsole = (push = true) => {
         clearSavedCredential();
+        clearShaoniandreamLogin();
         // 先绑定原账号发出清理，再废弃旧请求及内存；退出不退出管理员登录。
         void stopQuarkWebScan(); leaveQQReader(); leaveJinjiang(); leaveSTV(); stopZLibraryAccount(true); closeMsgEvents();
         ++consoleGeneration;

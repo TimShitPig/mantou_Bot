@@ -88,6 +88,7 @@ class 帮助网页服务:
 控制台会话认证指纹: str = globals().get("控制台会话认证指纹", "")
 _控制台会话存储锁 = globals().get("_控制台会话存储锁") or threading.RLock()
 _机器人配置请求锁: dict[tuple[int, str], dict[str, Any]] = globals().get("_机器人配置请求锁") or {}
+_少年梦登录请求代次: dict[tuple[int, str], object] = globals().get("_少年梦登录请求代次") or {}
 _聊天清理确认会话: dict[str, dict[str, Any]] = globals().get("_聊天清理确认会话") or {}
 _聊天清理执行任务: set[asyncio.Task[Any]] = globals().get("_聊天清理执行任务") or set()
 控制台后台任务: set[asyncio.Task[Any]] = globals().get("控制台后台任务") or set()
@@ -437,7 +438,7 @@ async def _后台刷新消息列表(
         "label": "少年梦登录会话 JSON",
         "kind": "secret",
         "secret": True,
-        "hint": "粘贴当前账号的登录结果或会话 JSON。只保存用户 ID 和 logintoken，按机器人隔离，只写入、不回显，留空保留；自动获取已有草稿作品 ID。",
+        "hint": "可用手机号和密码登录；也兼容粘贴已有登录结果或会话 JSON。只保存用户 ID 和 logintoken，密码不保存；按机器人隔离，只写入、不回显，留空保留，自动获取已有草稿作品 ID。",
     },
     "uc_pan_upload_dir": {
         "category": "uc_pan_settings",
@@ -646,8 +647,8 @@ def _插件配置可持久化(配置: Any) -> bool:
     )
 
 
-async def _持久化插件配置() -> None:
-    配置 = _当前作用域配置()
+async def _持久化插件配置(配置: Any = None) -> None:
+    配置 = 配置 if 配置 is not None else _当前作用域配置()
     异步保存方法 = getattr(配置, "save_config_async", None)
     if callable(异步保存方法):
         结果 = 异步保存方法()
@@ -2438,6 +2439,115 @@ async def _处理插件配置写入(request: web.Request) -> web.Response:
     return await _串行写入插件配置(request, _处理当前机器人配置写入)
 
 
+def _少年梦账号作用域键(配置: Any) -> tuple[int, str]:
+    基础 = getattr(配置, "基础配置", None)
+    return id(配置 if 基础 is None else 基础), 获取当前机器人AppID(配置)
+
+
+def _少年梦登录JSON(数据: dict[str, Any], 状态码: int = 200) -> web.Response:
+    return web.json_response(数据, status=状态码, headers={
+        "Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer",
+    })
+
+
+async def _等待少年梦配置保存(任务: asyncio.Task[Any]) -> None:
+    # 已开始的保存必须收尾；反复取消也不能让写入越过回滚和配置锁。
+    while not 任务.done():
+        try:
+            await asyncio.shield(任务)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    任务.result()
+
+
+async def _处理少年梦账号登录(request: web.Request) -> web.Response:
+    if not _请求已授权(request):
+        return _少年梦登录JSON({"ok": False, "error": "请先登录控制台"}, 401)
+    if not _请求来自同源(request):
+        return _少年梦登录JSON({"ok": False, "error": "请求来源无效"}, 403)
+    数据 = await _读取请求JSON(request)
+    手机号 = 数据.get("phone") if isinstance(数据, dict) else None
+    密码 = 数据.get("password") if isinstance(数据, dict) else None
+    if (not isinstance(手机号, str) or not re.fullmatch(r"[0-9]{11}", 手机号)
+            or not isinstance(密码, str) or not 0 < len(密码) <= 1024):
+        return _少年梦登录JSON({"ok": False, "error": "请输入有效的手机号和密码"}, 400)
+    配置 = _当前作用域配置()
+    appid = 获取当前机器人AppID(配置)
+    if not appid or not isinstance(_读取插件配置字典(配置), dict):
+        return _少年梦登录JSON({"ok": False, "error": "请先选择机器人"}, 400)
+    if not _请求已授权(request):
+        return _少年梦登录JSON({"ok": False, "error": "登录状态已更新，请重新登录控制台"}, 401)
+    会话值, 认证 = _取得请求会话(request), 控制台会话认证指纹
+    键, 代次 = _少年梦账号作用域键(配置), object()
+    _少年梦登录请求代次[键] = 代次
+    原会话 = _读取插件配置值(配置, "shaoniandream_settings", "shaoniandream_session", "")
+
+    def 仍有效() -> bool:
+        return (
+            _少年梦登录请求代次.get(键) is 代次
+            and _当前作用域配置() is 配置 and 获取当前机器人AppID(配置) == appid
+            and _取得请求会话(request) == 会话值 and 控制台会话.get(会话值, 0) > time.time()
+            and hmac.compare_digest(认证, 控制台会话认证指纹)
+            and hmac.compare_digest(认证, 获取控制台认证指纹(配置))
+        )
+
+    async def 保存登录结果(_: web.Request) -> web.Response:
+        if not 仍有效() or _读取插件配置值(配置, "shaoniandream_settings", "shaoniandream_session", "") != 原会话:
+            return _少年梦登录JSON({"ok": False, "error": "账号设置已更新，请重新登录"}, 409)
+        字典 = _读取插件配置字典(配置)
+        旧分类 = _复制插件配置值(字典.get("shaoniandream_settings"))
+        保存任务 = None
+        try:
+            _设置插件配置值(配置, "shaoniandream_settings", "shaoniandream_session", 新会话)
+            if _插件配置可持久化(配置):
+                保存任务 = asyncio.create_task(_持久化插件配置(配置))
+                await asyncio.shield(保存任务)
+            elif not isinstance(配置, dict):
+                raise RuntimeError("config_unavailable")
+            if not 仍有效():
+                raise PermissionError("session_changed")
+        except BaseException as exc:
+            if 保存任务 is not None:
+                try:
+                    await _等待少年梦配置保存(保存任务)
+                except BaseException:
+                    pass
+            if 旧分类 is None:
+                字典.pop("shaoniandream_settings", None)
+            else:
+                字典["shaoniandream_settings"] = 旧分类
+            清除 = getattr(配置, "清除待保存字段", None)
+            if callable(清除):
+                清除()
+            if _插件配置可持久化(配置):
+                回滚任务 = asyncio.create_task(_持久化插件配置(配置))
+                try:
+                    await _等待少年梦配置保存(回滚任务)
+                except BaseException as 回滚异常:
+                    logger.warning("少年梦登录状态保存失败：stage=rollback, error_type=%s", type(回滚异常).__name__)
+            if not isinstance(exc, Exception):
+                raise
+            logger.warning("少年梦登录状态保存失败：stage=save, error_type=%s", type(exc).__name__)
+            return _少年梦登录JSON({"ok": False, "error": "少年梦登录状态保存失败，请稍后重试"}, 409)
+        return _少年梦登录JSON({"ok": True, "configured": True, "message": "少年梦账号已登录"})
+
+    try:
+        from 功能文件.管理功能.小说功能.小说 import 少年梦小说
+
+        if not 仍有效():
+            return _少年梦登录JSON({"ok": False, "error": "登录状态已更新，请重新登录控制台"}, 401)
+        新会话 = _校验插件配置字段("shaoniandream_session", await 少年梦小说.登录少年梦账号(手机号, 密码))
+        return await _串行写入插件配置(request, 保存登录结果)
+    except Exception as exc:
+        logger.warning("少年梦账号登录失败：stage=login, error_type=%s", type(exc).__name__)
+        return _少年梦登录JSON({"ok": False, "error": "少年梦登录失败，请检查账号后重试"}, 502)
+    finally:
+        if _少年梦登录请求代次.get(键) is 代次:
+            _少年梦登录请求代次.pop(键, None)
+
+
 async def _处理QQ阅读API密钥(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
@@ -2541,6 +2651,8 @@ async def _处理当前机器人配置写入(request: web.Request) -> web.Respon
         阶段 = "写入配置"
         # 先完整校验，再一次性写入，避免同一请求中后续字段失败时留下半套配置。
         for 字段名, 定义, 值 in 待更新:
+            if 字段名 == "shaoniandream_session":
+                _少年梦登录请求代次.pop(_少年梦账号作用域键(_当前作用域配置()), None)
             _设置插件配置值(
                 _当前作用域配置(),
                 str(定义["category"]),
