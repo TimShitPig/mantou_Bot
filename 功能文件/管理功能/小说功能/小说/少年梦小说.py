@@ -9,6 +9,7 @@ import html
 import json
 import os
 from pathlib import Path
+import random
 import re
 import socket
 import ssl
@@ -46,6 +47,44 @@ _并发状态: dict[str, Any] = globals().get("_并发状态") or {}
 _少年梦正文恢复总时限 = 120.0
 _少年梦正文恢复退避 = (0.5, 1.0)
 _少年梦正文最多尝试 = 3
+_少年梦正文恢复并发数 = 8
+_少年梦正文每秒请求数 = 1
+_少年梦正文活动工人数 = 8
+_少年梦正文恢复状态: dict[str, Any] = {}
+
+
+def _获取少年梦正文恢复状态() -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    if _少年梦正文恢复状态.get("loop") is not loop:
+        _少年梦正文恢复状态.clear()
+        _少年梦正文恢复状态.update(loop=loop, semaphore=asyncio.Semaphore(_少年梦正文恢复并发数),
+                                 request_lock=asyncio.Lock(), next_request_at=0.0,
+                                 log_after=0.0, suppressed=0)
+    return _少年梦正文恢复状态
+
+
+async def _等待少年梦正文请求窗口() -> None:
+    # 200 个工人可以排队复用连接，但首次和恢复请求都不能成批冲击上游。
+    state = _获取少年梦正文恢复状态()
+    loop = asyncio.get_running_loop()
+    async with state["request_lock"]:
+        delay = state["next_request_at"] - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        state["next_request_at"] = loop.time() + 1.0 / _少年梦正文每秒请求数
+
+
+def _记录少年梦正文恢复(exc: 少年梦请求错误, attempt: int) -> None:
+    state = _获取少年梦正文恢复状态()
+    now = asyncio.get_running_loop().time()
+    if now < state["log_after"]:
+        state["suppressed"] += 1
+        return
+    suppressed, state["suppressed"] = state["suppressed"], 0
+    state["log_after"] = now + 1.0
+    logger.warning("少年梦正文瞬时请求恢复：stage=%s, attempt=%s, category=%s, network_type=%s, errno=%s, http_status=%s, 合并同类警告=%s, 恢复并发=%s",
+                   exc.request_stage, attempt, exc.category, exc.network_type, exc.errno,
+                   exc.http_status, suppressed, _少年梦正文恢复并发数)
 
 
 class 少年梦请求错误(RuntimeError):
@@ -136,12 +175,15 @@ def _签名(parameters: dict[str, Any]) -> dict[str, Any]:
     return dict(fields, sign=hashlib.md5(canonical.encode("utf-8")).hexdigest().upper())
 
 
-def 创建少年梦HTTP会话() -> aiohttp.ClientSession:
+def 创建少年梦HTTP会话(*, 正文恢复: bool = False) -> aiohttp.ClientSession:
     session = aiohttp.ClientSession(
         headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "okhttp/4.11.0", "version": "v4", "appversion": "1.5.7", "devicebrand": "Xiaomi", "appplatform": "shaoniandream"},
-        connector=aiohttp.TCPConnector(limit=少年梦并发数, limit_per_host=少年梦并发数, ttl_dns_cache=300),
+        connector=aiohttp.TCPConnector(limit=1 if 正文恢复 else 少年梦并发数,
+                                      limit_per_host=1 if 正文恢复 else 少年梦并发数,
+                                      ttl_dns_cache=300, force_close=正文恢复),
         timeout=aiohttp.ClientTimeout(total=45, sock_connect=10, sock_read=30),
         cookie_jar=aiohttp.DummyCookieJar(),
+        trust_env=True,
     )
     if hasattr(session, "_retry_connection"):
         session._retry_connection = False
@@ -156,6 +198,8 @@ async def _请求(session: aiohttp.ClientSession, path: str, fields: dict[str, A
         _并发状态.update(loop=loop, semaphore=asyncio.Semaphore(少年梦并发数))
     request_stage, http_status = "queue", None
     try:
+        if path == "/Author/getOneChapter":
+            await _等待少年梦正文请求窗口()
         async with _并发状态["semaphore"]:
             request_stage = "request"
             async with session.post(少年梦基础地址 + path, data=json.dumps(_签名(fields), ensure_ascii=False, separators=(",", ":")).encode("utf-8"), headers={"logintoken": token} if token else None, allow_redirects=False) as response:
@@ -185,6 +229,13 @@ async def _请求(session: aiohttp.ClientSession, path: str, fields: dict[str, A
         raise _分类网络异常(exc, request_stage=request_stage, http_status=http_status) from None
 
 
+async def _执行少年梦正文重试(fields: dict[str, Any], token: str) -> Any:
+    # 只在断线后的重读中排队并新建连接，不关闭其他章节共用的首轮会话。
+    async with _获取少年梦正文恢复状态()["semaphore"]:
+        async with 创建少年梦HTTP会话(正文恢复=True) as recovery:
+            return await _请求(recovery, "/Author/getOneChapter", fields, token=token)
+
+
 async def _请求少年梦草稿正文(session: aiohttp.ClientSession, fields: dict[str, Any], token: str) -> Any:
     # 只重读原章节，不重放登录、草稿选择或其他接口；预算包含队列、请求与退避。
     loop = asyncio.get_running_loop()
@@ -194,18 +245,19 @@ async def _请求少年梦草稿正文(session: aiohttp.ClientSession, fields: d
         if remaining <= 0:
             raise 少年梦请求错误("total_timeout", network_type="TimeoutError", request_stage="budget", attempt=attempt)
         try:
-            return await asyncio.wait_for(_请求(session, "/Author/getOneChapter", fields, token=token), timeout=remaining)
+            request = (_请求(session, "/Author/getOneChapter", fields, token=token) if attempt == 1
+                       else _执行少年梦正文重试(fields, token))
+            return await asyncio.wait_for(request, timeout=remaining)
         except asyncio.TimeoutError:
             raise 少年梦请求错误("total_timeout", network_type="TimeoutError", request_stage="budget", attempt=attempt) from None
         except 少年梦请求错误 as exc:
             exc.attempt = attempt
             if not exc.retryable or attempt == _少年梦正文最多尝试:
                 raise
-            delay = _少年梦正文恢复退避[attempt - 1]
+            delay = _少年梦正文恢复退避[attempt - 1] + random.uniform(0.0, 0.5)
             if deadline - loop.time() <= delay:
                 raise 少年梦请求错误("total_timeout", network_type="TimeoutError", request_stage="budget", attempt=attempt) from None
-            logger.warning("少年梦正文瞬时请求恢复：stage=%s, attempt=%s, category=%s, network_type=%s, errno=%s, http_status=%s",
-                           exc.request_stage, attempt, exc.category, exc.network_type, exc.errno, exc.http_status)
+            _记录少年梦正文恢复(exc, attempt)
             await asyncio.sleep(delay)
 
 
@@ -460,7 +512,8 @@ async def 下载少年梦正文(session: aiohttp.ClientSession, book_id: str, ch
     jobs = iter(enumerate(chapters))
     done, next_log = 0, max(1, (len(chapters) + 3) // 4)
     step = next_log
-    logger.info("少年梦小说章节进度：进度=0/%s, 并发数=%s, HTTP会话复用=开启", len(chapters), min(少年梦并发数, len(chapters)))
+    logger.info("少年梦小说章节进度：进度=0/%s, 活动工人数=%s, 每秒请求=%s, 连接池上限=%s, HTTP会话复用=开启",
+                len(chapters), min(_少年梦正文活动工人数, len(chapters)), _少年梦正文每秒请求数, 少年梦并发数)
 
     async def worker() -> None:
         nonlocal done, next_log
@@ -473,7 +526,7 @@ async def 下载少年梦正文(session: aiohttp.ClientSession, book_id: str, ch
             if done >= next_log or done == len(chapters):
                 logger.info("少年梦小说章节进度：进度=%s/%s, 百分比=%s%%, HTTP会话复用=开启", done, len(chapters), int(done * 100 / len(chapters)))
                 next_log += step
-    tasks = [asyncio.create_task(worker()) for _ in range(min(少年梦并发数, len(chapters)))]
+    tasks = [asyncio.create_task(worker()) for _ in range(min(_少年梦正文活动工人数, len(chapters)))]
     try:
         await asyncio.gather(*tasks)
     finally:
