@@ -6272,7 +6272,7 @@
           catch (error) { if (!msgMatchesCurrent(target.chat_type, target.chat_id, target.appid)) return; failCount++; }
         }
         toast(`撤回完成：成功 ${okCount} 条${failCount ? `，失败 ${failCount} 条` : ''}`);
-        exitMultiMode(); loadMsgHistory();
+        exitMultiMode();
       };
       const normalizeMsgIdentity = (value) => String(value ?? '')
         .replace(/[\u200b-\u200d\ufeff]/g, '')
@@ -8039,7 +8039,7 @@
         });
         if (initialPositioning) body.classList.add('msg-positioning');
         if (msgState.historyWindow?.has_newer) html += '<button class="msg-load-older" id="msg-load-newer" type="button">加载后续消息</button>';
-        const preserveAnchor = scroll.prepend || scroll.preserveAnchor;
+        const preserveAnchor = scroll.prepend || scroll.preserveAnchor || (scroll.recallUpdate && !keepLatestVisible);
         const historyAnchor = preserveAnchor ? captureMsgHistoryAnchor(body) : null;
         renderMsgMessageDom(body, html, renderScope);
         Object.keys(rawStore).forEach((key) => {
@@ -8213,7 +8213,7 @@
             const body = $('msg-body');
             renderMsgMessages(
               {...(msgState.historyData || {}), messages:msgState.messages},
-              {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+              {recallUpdate:true, previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
             );
           }
           return;
@@ -8801,6 +8801,7 @@
         const id = String(messageId || '').trim();
         if (!id) return;
         const scope = msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid);
+        msgState.historyCache.delete(scope);
         const confirmed = msgConfirmedRecallScopes.get(scope) || new Set();
         confirmed.add(id);
         while (confirmed.size > 4096) confirmed.delete(confirmed.values().next().value);
@@ -8819,13 +8820,13 @@
         const body = $('msg-body');
         renderMsgMessages(
           {...(msgState.historyData || {}), messages:msgState.messages},
-          {previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
+          {recallUpdate:true, previousTop:body?.scrollTop || 0, previousHeight:body?.scrollHeight || 0},
         );
       };
       const recallMessage = async (messageId) => {
         const target = {chat_id:msgState.chatId, chat_type:msgState.chatType, appid:msgState.chatAppid};
         if (!confirm('确定撤回这条消息吗？')) return;
-        try { await api('message/recall', {method:'POST', body:JSON.stringify({...target, message_id:messageId})}); if (!msgMatchesCurrent(target.chat_type, target.chat_id, target.appid)) return; markLocalMessageRecalled(messageId); msgState.historyCache.delete(msgScopeKey(msgState.chatType, msgState.chatId, msgState.chatAppid)); toast('撤回成功'); loadMsgHistory(); }
+        try { await api('message/recall', {method:'POST', body:JSON.stringify({...target, message_id:messageId})}); if (!msgMatchesCurrent(target.chat_type, target.chat_id, target.appid)) return; markLocalMessageRecalled(messageId); toast('撤回成功'); }
         catch (error) { toast(error.message); }
       };
       const refreshGroupInfo = async () => {
