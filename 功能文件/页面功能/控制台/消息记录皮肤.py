@@ -5,7 +5,7 @@ from .总览外观 import 总览外观
 
 消息记录皮肤 = """
     .msg-media-save-status { display:block; margin-top:4px; color:var(--muted); font-size:11px; }
-    .msg-tag.member-removed { background:var(--hover); color:var(--muted); }
+    .msg-tag.member-removed { background:var(--danger-bg); color:var(--danger); }
     /* 与后台共用表面及控件色；气泡保留独立色值，手机 QQ 配色在下方覆盖。 */
     :root body.messages-workspace {
       --bg:var(--studio-canvas);

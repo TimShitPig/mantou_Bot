@@ -3078,7 +3078,7 @@
         const group = msgState.chatType === 'group' && String(message.chat_type || 'group') === 'group';
         const role = !removed && group ? ({owner:'群主', admin:'管理员', member:'群成员'}[memberRole] || '') : '';
         const tags = [];
-        if (removed) tags.push('<span class="msg-tag member-removed">已移除</span>');
+        if (removed) tags.push('<span class="msg-tag member-removed">已退群</span>');
         else if (role) tags.push(`<span class="msg-tag role ${memberRole}">${role}</span>`);
         else if (!isSelf && !botAuthor && group
           && (!message.appid || String(message.appid).trim() === msgState.chatAppid)

@@ -2302,20 +2302,21 @@ def _记录群成员新活动(会话标识: str, 成员标识: str, appid: str, 
     if not 版本 or not re.fullmatch(r"[0-9]{4,32}", str(appid or "")) or not 成员标识:
         return
     快照, 数据库键 = _群成员状态上下文()
-    if not 数据库键:
-        return
     原状态 = _群成员移除状态缓存.get((数据库键, appid, 会话标识, 成员标识)) or {}
+    if not 数据库键 and not 原状态:
+        return
     if 版本 <= int(原状态.get("member_state_version") or 0):
         return
     状态 = _接受群成员移除状态(数据库键, {"appid": appid, "group_id": 会话标识, "member_id": 成员标识,
         "member_removed": False, "member_removed_at": 0, "member_state_version": 版本})
     if 原状态.get("member_removed"):
         _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
-        _排队消息持久化("group_member_state", {"database_snapshot": 快照, "state": 状态})
+        if 数据库键 and isinstance(快照, dict):
+            _排队消息持久化("group_member_state", {"database_snapshot": 快照, "state": 状态})
 
 
-async def 标记群成员已移除(会话标识: str, 成员标识: str, appid: str, *, 确认时间: Any = None) -> dict[str, Any]:
-    """仅供官方踢出已经明确成功的调用方使用；先更新展示，再等待持久化。"""
+async def 标记群成员已移除(会话标识: str, 成员标识: str, appid: str, *, 确认时间: Any = None, 等待持久化: bool = True) -> dict[str, Any]:
+    """仅供官方明确成功的踢出或退群事件使用；先更新展示，再等待持久化。"""
     会话标识, 成员标识, appid = (str(值 or "").strip() for 值 in (会话标识, 成员标识, appid))
     版本 = _群成员状态版本(time.time() if 确认时间 is None else 确认时间)
     if not 会话标识 or not 成员标识 or not re.fullmatch(r"[0-9]{4,32}", appid) or not 版本:
@@ -2324,24 +2325,35 @@ async def 标记群成员已移除(会话标识: str, 成员标识: str, appid: 
     状态 = _接受群成员移除状态(数据库键, {"appid": appid, "group_id": 会话标识, "member_id": 成员标识,
         "member_removed": True, "member_removed_at": 版本 // 1_000_000, "member_state_version": 版本})
     _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
+    if not 数据库键 or not isinstance(快照, dict):
+        资料 = _群成员状态资料(数据库键, 会话标识, 成员标识, appid)
+        当前作用域 = _群成员状态上下文()[1] == 数据库键
+        return {"ok": True, "persisted": False, "pending": False, "write_failed": False,
+                "member_removed": 资料.get("member_removed") is True,
+                "appid": appid, "chat_id": 会话标识, "scope_current": 当前作用域, "member_profile": 资料 if 当前作用域 else {}}
     项目 = {"database_snapshot": 快照, "state": 状态}
     已存 = None
-    try:
-        async with _数据库写入锁:
-            已存 = await _异步执行消息记录同步(_写入群成员状态项目, 项目)
-        if isinstance(已存, dict):
-            _接受群成员移除状态(数据库键, 已存)
-            _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
-    except asyncio.CancelledError:
-        _排队消息持久化("group_member_state", 项目)
-        raise
-    except Exception as 异常:
-        logger.warning("已移除群成员状态保存失败：错误类型=%s", type(异常).__name__)
-    if 已存 is None:
-        _排队消息持久化("group_member_state", 项目)
+    已排队 = False
+    if not 等待持久化:
+        已排队 = _排队消息持久化("group_member_state", 项目)
+    else:
+        try:
+            async with _数据库写入锁:
+                已存 = await _异步执行消息记录同步(_写入群成员状态项目, 项目)
+            if isinstance(已存, dict):
+                _接受群成员移除状态(数据库键, 已存)
+                _推送群成员状态(数据库键, 会话标识, 成员标识, appid)
+        except asyncio.CancelledError:
+            _排队消息持久化("group_member_state", 项目)
+            raise
+        except Exception as 异常:
+            logger.warning("已移除群成员状态保存失败：错误类型=%s", type(异常).__name__)
+        if 已存 is None:
+            已排队 = _排队消息持久化("group_member_state", 项目)
     资料 = _群成员状态资料(数据库键, 会话标识, 成员标识, appid)
     当前作用域 = _群成员状态上下文()[1] == 数据库键
-    return {"ok": True, "persisted": 已存 is not None, "member_removed": 资料.get("member_removed") is True,
+    return {"ok": True, "persisted": 已存 is not None, "pending": 已排队, "write_failed": 已存 is None and not 已排队,
+            "member_removed": 资料.get("member_removed") is True,
             "appid": appid, "chat_id": 会话标识, "scope_current": 当前作用域, "member_profile": 资料 if 当前作用域 else {}}
 
 
@@ -4942,6 +4954,12 @@ async def 记录群成员系统消息(
             群标识, 应用, 成员标识, 时间戳, 事件编号, 昵称, 用户标识, str(统一用户openid or ""),
         ):
             return None
+
+    if 事件类型 == "group_member_remove" and _群成员状态版本(时间戳):
+        try:
+            await 标记群成员已移除(群标识, 成员标识, 应用, 确认时间=时间戳, 等待持久化=False)
+        except Exception as 异常:
+            logger.warning("群成员退群状态更新失败：错误类型=%s", type(异常).__name__)
 
     成员昵称 = _有效用户昵称(str(昵称 or "").strip(), 成员标识)
     for 候选标识 in 候选标识列表:

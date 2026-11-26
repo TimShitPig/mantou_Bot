@@ -451,6 +451,8 @@ async def _移除后撤回消息(chat_id, appid, http, member_openids, 确认时
     已撤回 = []
     待撤回 = []
     标记完成 = True
+    标记待持久化 = False
+    标记保存失败 = False
     查询未完成 = False
     固定机器人 = SimpleNamespace(api=SimpleNamespace(_http=http))
     if 固定数据库键 is None:
@@ -464,17 +466,25 @@ async def _移除后撤回消息(chat_id, appid, http, member_openids, 确认时
             标记完成 = False
             break
         try:
-            标记 = await 消息记录.标记群成员已移除(chat_id, 成员, appid, 确认时间=确认时间)
+            标记 = await 消息记录.标记群成员已移除(chat_id, 成员, appid, 确认时间=确认时间, 等待持久化=False)
             if 标记.get("scope_current") is False:
                 标记完成 = False
                 break
             if 标记.get("member_profile"):
                 资料[成员] = 标记["member_profile"]
-            标记完成 = 标记完成 and 标记.get("persisted") is True
+            if 标记.get("persisted") is True:
+                pass
+            elif 标记.get("pending") is True:
+                标记完成 = False
+                标记待持久化 = True
+            else:
+                标记完成 = False
+                标记保存失败 = 标记保存失败 or 标记.get("write_failed") is True
         except asyncio.CancelledError:
             raise
         except Exception as 异常:
             标记完成 = False
+            标记保存失败 = True
             # 移除已由平台确认，写库失败也不能把结果改成未移除。
             if 作用域仍有效():
                 资料[成员] = {
@@ -548,9 +558,10 @@ async def _移除后撤回消息(chat_id, appid, http, member_openids, 确认时
         await asyncio.gather(*任务, return_exceptions=True)
     return {
         "member_profiles": 资料 if 作用域仍有效() else {}, "member_state_persisted": 标记完成,
+        "member_state_pending": 标记待持久化, "member_state_write_failed": 标记保存失败,
         "member_scope_current": 作用域仍有效(),
         "recall_summary": 汇总, "recalled_message_ids": 已撤回,
-        "recall_incomplete": 查询未完成 or not 标记完成 or bool(汇总["failed"] or 汇总["skipped"]),
+        "recall_incomplete": 查询未完成 or not 作用域仍有效() or bool(汇总["failed"] or 汇总["skipped"]),
     }
 
 
