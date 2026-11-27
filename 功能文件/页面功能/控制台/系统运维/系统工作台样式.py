@@ -64,10 +64,10 @@
       font-size: 13px; font-weight: 700;
     }
     .studio-system-link {
-      display: inline-flex; align-items: center; min-height: 36px; gap: 5px;
+      display: inline-flex; align-items: center; min-height: 44px; gap: 5px;
       padding: 5px 10px; border-radius: 9px; color: var(--system-accent);
       background: var(--studio-accent-soft, #ece6ff);
-      font-size: 12px; font-weight: 700; text-decoration: none;
+      font-size: 13px; font-weight: 700; text-decoration: none;
     }
     .studio-system-link:hover { text-decoration: underline; }
     .studio-system-link:focus-visible { outline: 2px solid var(--system-accent); outline-offset: 2px; }
@@ -111,8 +111,9 @@
     #database-config-editor .config-field label { color: var(--system-muted); font-size: 12px; }
     #database-config-editor .config-field small { font-size: 11px; }
     #database-config-editor .config-field :is(input, select) {
-      min-height: 42px; border-radius: 10px; border-color: var(--system-border);
+      min-height: 44px; border-radius: 10px; border-color: var(--system-border);
       background: var(--system-soft); color: var(--studio-ink, #27213d);
+      font-size: 14px;
     }
     #database-config-editor .config-field :is(input, select):focus {
       border-color: var(--system-accent); box-shadow: 0 0 0 3px var(--studio-accent-soft, #ece6ff);
@@ -147,7 +148,7 @@
       display: inline-block; padding: 2px 8px; border-radius: 99px;
       color: var(--system-muted); background: var(--system-soft);
     }
-    .studio-system-state.good { color: var(--mint-ink); background: var(--mint); }
+    .studio-system-state.good { color: var(--studio-mint-ink); background: var(--studio-mint); }
     @media (max-width: 720px) {
       #database-config-editor .config-fields { grid-template-columns: minmax(0, 1fr); }
       .studio-resource-grid, .studio-system-split, .studio-help-catalog {

@@ -390,6 +390,15 @@
       .studio-bot-tabs button { font-size: 12px; }
       .studio-bot-tabs svg { width: 14px; height: 14px; }
     }
+    @media (max-width: 560px) {
+      .studio-bot-tabs {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        width: 100%;
+        overflow: visible;
+      }
+      .studio-bot-tabs button:last-child { grid-column: 1 / -1; }
+    }
     #page-bot .qq-reader-toolbar { flex-wrap: wrap; margin: 0 0 16px; gap: 10px; font-size: 12px; }
     #page-bot .qq-reader-accounts { gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 226px), 280px)); }
     #page-bot .qq-reader-account {
@@ -511,7 +520,7 @@
     #page-novels .novel-item-title strong { white-space: normal; overflow-wrap: anywhere; }
     #page-novels .novel-item-copy small { color: var(--studio-muted); line-height: 1.4; }
     #page-novels .novel-item-status { color: var(--studio-muted); }
-    #page-novels .novel-item.is-enabled .novel-item-status { color: var(--mint-ink); }
+    #page-novels .novel-item.is-enabled .novel-item-status { color: var(--studio-mint-ink); }
     #page-novels .novel-item .switch { align-self: flex-end; transform: none; }
     #page-novels .novel-badge {
       width: 37px;
@@ -521,8 +530,8 @@
       color: var(--studio-accent);
     }
     #page-novels .novel-item:nth-child(3n + 2) .novel-badge {
-      background: var(--mint);
-      color: var(--mint-ink);
+      background: var(--studio-mint);
+      color: var(--studio-mint-ink);
     }
     #page-novels .novel-item:nth-child(3n) .novel-badge {
       background: var(--studio-peach);
@@ -570,7 +579,7 @@
     }
     #page-pans .pan-account-toolbar-actions { flex-wrap: wrap; }
     #page-pans .pan-add-account {
-      min-height: 38px;
+      min-height: 44px;
       padding-inline: 14px;
       border-color: var(--accent-fill);
       border-radius: 10px;
