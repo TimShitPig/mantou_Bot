@@ -419,9 +419,11 @@
       min-width: 48px;
       height: 28px;
       min-height: 28px;
-      flex: 0 0 48px;
       transform: none;
     }
+    /* 机器人设置行横排、小说卡片竖排，flex 主轴尺寸不能共用。 */
+    #page-bot .studio-novel-switch-row .switch { flex: 0 0 48px; }
+    #page-novels .novel-item .switch { flex: 0 0 28px; }
     #page-bot .studio-novel-switch-row .switch span,
     #page-novels .novel-item .switch span {
       top: 3px;

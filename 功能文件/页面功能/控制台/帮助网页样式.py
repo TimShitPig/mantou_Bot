@@ -533,7 +533,7 @@
       .pan-account-meta > span { min-width:0; overflow:visible; overflow-wrap:anywhere; text-overflow:clip; white-space:normal; }
       .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; transition:transform .18s ease; }
       .pan-account-object:hover .pan-object-arrow { transform:translateX(2px); }
-      .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:8px 1px 0; border-top:1px solid var(--line); }
+      .pan-account-card-actions { display:flex; box-sizing:border-box; align-items:center; justify-content:space-between; gap:6px; min-height:44px; margin-top:auto; padding:8px 1px 0; border-top:1px solid var(--line); }
       .pan-account-card-actions .tag { white-space:nowrap; }
       .pan-account-default { min-height:26px; padding:0 7px; border:1px solid #cce4d5; border-radius:5px; background:#f3faf5; color:#318154; font-family:inherit; font-size:10px; font-weight:650; white-space:nowrap; cursor:pointer; }
       .pan-account-default:hover:not(:disabled) { border-color:#8fc4a1; background:#e8f6ed; }
