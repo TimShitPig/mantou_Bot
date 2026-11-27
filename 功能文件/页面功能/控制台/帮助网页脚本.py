@@ -3298,6 +3298,7 @@
       const msgRemovedMemberNames = (message) => message?.source === 'group_members_removed' && Array.isArray(message.system_members)
         ? message.system_members.slice(0, 20).filter((name) => typeof name === 'string').map((name) => name.trim()).filter(Boolean)
         : [];
+      const msgIsWhitespaceOnly = (value) => typeof value === 'string' && value.length > 0 && !value.trim();
       const msgMessagePreview = (message) => {
         const text = String(message.content || '');
         if (text.trim()) return text;
@@ -3305,7 +3306,8 @@
         const first = Array.isArray(media.items) && media.items[0] && typeof media.items[0] === 'object' ? media.items[0] : {};
         const labels = {图片:'[图片]',image:'[图片]',img:'[图片]',视频:'[视频]',video:'[视频]',语音:'[语音]',音频:'[语音]',audio:'[语音]',voice:'[语音]',record:'[语音]',文件:'[文件]',file:'[文件]'};
         const label = (type) => Object.prototype.hasOwnProperty.call(labels, type) ? labels[type] : '';
-        return label(String(first.type || '').trim().toLowerCase()) || label(String(media.type || '').trim().toLowerCase());
+        return label(String(first.type || '').trim().toLowerCase()) || label(String(media.type || '').trim().toLowerCase())
+          || (msgIsWhitespaceOnly(text) ? '（空白消息）' : '');
       };
       const msgQuoteSummary = (message = {}, profiles = msgState.profiles) => {
         const id = String(message.user_id || message.userId || '').trim();
@@ -7997,7 +7999,7 @@
           content = content.replace(/\uFFFC/g, '').trim();
           if (mediaTextPosition || segmentedMedia) content = '';
           if (!content && mediaText && !segmentedMedia) content = renderText(mediaText);
-          if (!content && !media) content = '（空消息）';
+          if (!content && !media) content = msgIsWhitespaceOnly(String(m.content || '')) ? '（空白消息）' : '（空消息）';
           const contentHtml = content ? renderMsgMessageContent(m, content, profiles) : '';
           const plainContent = plainMsgPreview(m.content || '', profiles);
           const isWelcomeMessage = botMessage && msgState.chatType === 'group'
