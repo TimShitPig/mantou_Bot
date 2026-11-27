@@ -163,7 +163,7 @@
       letter-spacing: .14em;
     }
     .studio-nav-group a {
-      min-height: 39px;
+      min-height: 44px;
       padding: 7px 8px;
       border-radius: 7px;
       color: #ded6c6;
@@ -188,7 +188,7 @@
     .studio-nav-group:nth-child(3) .studio-nav-icon { background: #ffffff0d; color: #9fc0ad; }
     .studio-nav-icon svg { width: 15px; height: 15px; }
     .studio-exit {
-      min-height: 36px;
+      min-height: 44px;
       border: 1px solid #ffffff1c;
       border-radius: 7px;
       background: transparent;
@@ -238,13 +238,13 @@
     }
     body:not(.messages-workspace) .topbar .theme-toggle-button,
     body:not(.messages-workspace) .topbar .admin-chip {
-      min-height: 36px;
+      min-height: 44px;
       border: 1px solid var(--studio-border);
       border-radius: 7px;
       background: transparent;
       color: var(--studio-ink);
     }
-    body:not(.messages-workspace) .topbar .theme-toggle-button { width: 36px; color: var(--studio-muted); }
+    body:not(.messages-workspace) .topbar .theme-toggle-button { width: 44px; color: var(--studio-muted); }
     body:not(.messages-workspace) .topbar .theme-toggle-button:hover { color: var(--studio-accent); }
     body:not(.messages-workspace) .topbar .admin-avatar {
       border-radius: 4px;
@@ -393,10 +393,10 @@
       border-radius: 8px;
       background: var(--studio-soft);
     }
-    body:not(.messages-workspace) input:focus,
-    body:not(.messages-workspace) select:focus,
-    body:not(.messages-workspace) textarea:focus,
-    body:not(.messages-workspace) [contenteditable="true"]:focus {
+    body:not(.messages-workspace) input:focus-visible,
+    body:not(.messages-workspace) select:focus-visible,
+    body:not(.messages-workspace) textarea:focus-visible,
+    body:not(.messages-workspace) [contenteditable="true"]:focus-visible {
       outline: 2px solid color-mix(in srgb, var(--studio-accent) 30%, transparent);
       outline-offset: 1px;
     }
@@ -615,5 +615,147 @@
     }
     @media (prefers-reduced-motion: reduce) {
       * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+
+    /* ========== 16. 竹青封面：把总览做成一张有记忆点的工作札 ========== */
+    /* 导航保持深色书脊，当前页用暖金定位，不依赖轻微的背景色差。 */
+    body:not(.messages-workspace) #console-sidebar .studio-nav-group a[aria-current="page"] {
+      background: #ffffff0d;
+      color: #fffaf0;
+      box-shadow: inset 3px 0 0 #dfbd72;
+    }
+    body:not(.messages-workspace) #console-sidebar .studio-nav-group a[aria-current="page"] .studio-nav-icon {
+      background: #dfbd721c;
+      color: #f0d99f;
+    }
+    body:not(.messages-workspace) #console-sidebar .studio-nav-group a:focus-visible {
+      outline-color: #f0d99f;
+    }
+
+    /* 问候卡承担品牌封面：墨竹绿、暖金数字、克制的纸雕圆环。 */
+    body:not(.messages-workspace) #page-dashboard .dash-greet {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      border-color: #355d48;
+      background: linear-gradient(128deg, #173a2d 0%, #1c4937 62%, #285642 100%);
+      color: #f5f1e6;
+      box-shadow: 0 16px 36px #173a2d20;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-greet::after {
+      position: absolute;
+      z-index: -1;
+      top: -176px;
+      right: -74px;
+      width: 330px;
+      height: 330px;
+      border: 1px solid #ffffff24;
+      border-radius: 50%;
+      box-shadow: 0 0 0 34px #ffffff0b, 0 0 0 72px #ffffff08;
+      content: "";
+      pointer-events: none;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-greet > * { position: relative; z-index: 1; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-greet-line { color: #e6d7ad; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-dot {
+      background: #e5c57d;
+      box-shadow: 0 0 0 4px #e5c57d24;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-greet-title { color: #fffaf0; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-greet-sub { color: #d5dfd4; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metrics { border-color: #ffffff36; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metric { border-color: #ffffff35; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metric strong { color: #f0d28d; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metric span { color: #d2ddd2; }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .studio-primary {
+      border: 1px solid #f2d891;
+      background: #e5c57d;
+      color: #20392c;
+      box-shadow: none;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .studio-primary:hover {
+      background: #f0d593;
+      color: #173226;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .outline-button {
+      border-color: #ffffff63;
+      background: #ffffff0b;
+      color: #fffaf0;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-greet .outline-button:hover {
+      border-color: #fffaf0;
+      background: #ffffff19;
+    }
+
+    /* 快照换成暖纸色，和封面形成明暗对照；暗色主题独立反转。 */
+    body:not(.messages-workspace) #page-dashboard .dash-snap {
+      --snapshot-bg: #eee7d6;
+      --snapshot-border: #d4c8aa;
+      --snapshot-divider: #756a5036;
+      --snapshot-heading: #314d3e;
+      --snapshot-label: #625b4e;
+      --snapshot-value: #202b23;
+      --snapshot-accent: #76591d;
+      --snapshot-positive: #1b6349;
+      border-radius: 12px;
+      box-shadow: 0 12px 28px #30281b12;
+    }
+    :root[data-theme="dark"] body:not(.messages-workspace) #page-dashboard .dash-snap {
+      --snapshot-bg: #1b2922;
+      --snapshot-border: #3d5646;
+      --snapshot-divider: #ffffff2b;
+      --snapshot-heading: #ead59e;
+      --snapshot-label: #c0c8bd;
+      --snapshot-value: #f2efe6;
+      --snapshot-accent: #c5d8aa;
+      --snapshot-positive: #b8dabb;
+      box-shadow: none;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-snap-list dd { font-weight: 650; }
+
+    /* 服务目录像一页编目：暖金编号、清晰的整行焦点和不移位的反馈。 */
+    body:not(.messages-workspace) #page-dashboard .dash-biz-index {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid #d8c89f;
+      border-radius: 8px;
+      background: #f3ebd8;
+      color: #735820;
+      font-size: 11px;
+      font-weight: 750;
+    }
+    :root[data-theme="dark"] body:not(.messages-workspace) #page-dashboard .dash-biz-index {
+      border-color: #594a2b;
+      background: #30291d;
+      color: #e4ca8b;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-biz-row {
+      border-radius: 8px;
+      transition: background .16s ease, box-shadow .16s ease;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-biz-row:hover {
+      background: #f3eedf;
+      box-shadow: inset 3px 0 0 #1c6650;
+    }
+    :root[data-theme="dark"] body:not(.messages-workspace) #page-dashboard .dash-biz-row:hover {
+      background: #242d24;
+      box-shadow: inset 3px 0 0 #86b79e;
+    }
+    body:not(.messages-workspace) #page-dashboard .dash-biz-row:focus-visible { outline-offset: 3px; }
+    body:not(.messages-workspace) #page-dashboard .dash-biz-row-arrow { transition: color .16s ease, background .16s ease, border-color .16s ease; }
+
+    @media (max-width: 640px) {
+      body:not(.messages-workspace) #page-dashboard .dash-greet { padding: 22px 18px; }
+      body:not(.messages-workspace) #page-dashboard .dash-greet::after { top: -205px; right: -205px; }
+      body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metrics { gap: 8px; }
+      body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metric { padding-right: 7px; }
+      body:not(.messages-workspace) #page-dashboard .dash-greet .dash-metric span { font-size: 11px; letter-spacing: .03em; }
+      body:not(.messages-workspace) #page-dashboard .dash-greet .dash-actions { gap: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body:not(.messages-workspace) #page-dashboard .dash-biz-row,
+      body:not(.messages-workspace) #page-dashboard .dash-biz-row-arrow { transition: none; }
     }
 """

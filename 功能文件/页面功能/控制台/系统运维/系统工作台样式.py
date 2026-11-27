@@ -109,7 +109,7 @@
       align-items: start;
     }
     #database-config-editor .config-field label { color: var(--system-muted); font-size: 12px; }
-    #database-config-editor .config-field small { font-size: 11px; }
+    #database-config-editor .config-field small { font-size: 12px; }
     #database-config-editor .config-field :is(input, select) {
       min-height: 44px; border-radius: 10px; border-color: var(--system-border);
       background: var(--system-soft); color: var(--studio-ink, #27213d);
@@ -143,7 +143,7 @@
       flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--system-border);
     }
     #database-config-editor .database-test-result { margin-top: 0; overflow-wrap: anywhere; }
-    .studio-db-footnote { margin: 8px 0 0; color: var(--system-muted); font-size: 11px; }
+    .studio-db-footnote { margin: 8px 0 0; color: var(--system-muted); font-size: 12px; line-height: 1.6; }
     .studio-system-state {
       display: inline-block; padding: 2px 8px; border-radius: 99px;
       color: var(--system-muted); background: var(--system-soft);

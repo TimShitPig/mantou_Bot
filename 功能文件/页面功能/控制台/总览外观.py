@@ -68,25 +68,43 @@
       display: flex;
       flex-direction: column;
       padding: clamp(18px, 2vw, 24px);
-      border: 1px solid #2b2721;
+      --snapshot-bg: #211e19;
+      --snapshot-border: #2b2721;
+      --snapshot-divider: #ffffff1f;
+      --snapshot-heading: #d8cfbf;
+      --snapshot-label: #a89f8d;
+      --snapshot-value: #f4eee2;
+      --snapshot-accent: #9fc0ad;
+      --snapshot-positive: #b9d6c4;
+      border: 1px solid var(--snapshot-border);
       border-radius: 12px;
-      background: #211e19;
-      color: #f2ecdf;
+      background: var(--snapshot-bg);
+      color: var(--snapshot-value);
       box-shadow: 0 18px 40px #211e1914;
     }
-    :root[data-theme="dark"] .dash-snap { border-color: #332e25; background: #1b1813; box-shadow: none; }
+    :root[data-theme="dark"] .dash-snap {
+      --snapshot-bg: #100f0c;
+      --snapshot-border: #3a3327;
+      --snapshot-divider: #ffffff1a;
+      --snapshot-heading: #d8cfbf;
+      --snapshot-label: #a89f8d;
+      --snapshot-value: #f4eee2;
+      --snapshot-accent: #9fc0ad;
+      --snapshot-positive: #b9d6c4;
+      box-shadow: none;
+    }
     .dash-snap-head {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
       gap: 10px;
       padding-bottom: 11px;
-      border-bottom: 1px solid #ffffff1f;
-      color: #d8cfbf;
+      border-bottom: 1px solid var(--snapshot-divider);
+      color: var(--snapshot-heading);
       font-size: 11.5px;
       letter-spacing: .1em;
     }
-    .dash-snap-head a { display: inline-flex; align-items: center; gap: 2px; color: #9fc0ad; font-size: 11px; text-decoration: none; }
+    .dash-snap-head a { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--snapshot-accent); font-size: 12px; text-decoration: none; }
     .dash-snap-head a svg { width: 13px; height: 13px; }
     .dash-snap-list { margin: 4px 0 0; }
     .dash-snap-list div {
@@ -95,12 +113,12 @@
       justify-content: space-between;
       gap: 12px;
       padding: 12px 0;
-      border-bottom: 1px dotted #ffffff21;
+      border-bottom: 1px dotted var(--snapshot-divider);
     }
-    .dash-snap-list dt { color: #a89f8d; font-size: 11.5px; letter-spacing: .04em; }
+    .dash-snap-list dt { color: var(--snapshot-label); font-size: 12px; letter-spacing: .02em; }
     .dash-snap-list dd {
       margin: 0;
-      color: #f4eee2;
+      color: var(--snapshot-value);
       font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
       font-size: 15px;
       font-weight: 500;
@@ -113,11 +131,11 @@
       gap: 10px;
       margin-top: auto;
       padding-top: 12px;
-      color: #a89f8d;
+      color: var(--snapshot-label);
       font-size: 11.5px;
     }
     .dash-snap-foot strong {
-      color: #b9d6c4;
+      color: var(--snapshot-positive);
       font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
       font-size: 13px;
       font-weight: 500;
@@ -134,7 +152,7 @@
     .dash-biz-head p { margin: 5px 0 0; color: var(--studio-muted); font-size: 12px; }
     .dash-biz-tag {
       padding: 4px 9px;
-      border: 1px solid #1c66503d;
+      border: 1px solid color-mix(in srgb, var(--studio-accent) 24%, transparent);
       border-radius: 999px;
       color: var(--studio-accent);
       font-size: 10.5px;
@@ -175,7 +193,7 @@
       color: var(--studio-muted);
     }
     .dash-biz-row-arrow svg { width: 15px; height: 15px; }
-    .dash-biz-row:hover .dash-biz-row-arrow { border-color: var(--studio-accent); color: var(--studio-accent); }
+    .dash-biz-row:hover .dash-biz-row-arrow { border-color: var(--studio-accent); color: var(--studio-accent); background: var(--studio-accent-soft); }
     .dash-biz-row:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
     .dash-guide {
       display: grid;
@@ -294,7 +312,7 @@
 
     /* ========== 18. 细节过渡与内层控件统一 ========== */
     /* 深色下让“系统快照”仍保持一块更深的底，不被普通卡片吞掉 */
-    :root[data-theme="dark"] .dash-snap { background: #100f0c; border-color: #3a3327; }
+    :root[data-theme="dark"] .dash-snap { background: var(--snapshot-bg); border-color: var(--snapshot-border); }
 
     /* 视图切换轻微淡入，操作反馈更连贯（尊重 reduced-motion） */
     body:not(.messages-workspace) .page-view { animation: studioFade .22s ease both; }
@@ -377,4 +395,52 @@
       font-variant-numeric: tabular-nums;
     }
     .studio-resource h3 { color: var(--studio-muted); font-size: 11.5px; letter-spacing: .1em; }
+
+    /* ========== 20. 交互细节：一致的控件尺寸、焦点与主题反馈 ========== */
+    body:not(.messages-workspace) {
+      --studio-action-height: 40px;
+      --studio-touch-height: 44px;
+    }
+    body:not(.messages-workspace) #console-workspace :is(.studio-primary, .primary-button, .outline-button, .studio-system-link) {
+      min-height: var(--studio-action-height);
+    }
+    body:not(.messages-workspace) :is(a, button, input, select, textarea, [tabindex]):focus-visible {
+      outline: 2px solid var(--studio-accent);
+      outline-offset: 2px;
+    }
+    body:not(.messages-workspace) :is(input, select, textarea, [contenteditable="true"]):focus:not(:focus-visible) {
+      outline: none;
+      box-shadow: none;
+    }
+    #page-bot .studio-novel-switch-row .switch,
+    #page-novels .novel-item .switch {
+      box-sizing: border-box;
+      width: 48px;
+      min-width: 48px;
+      height: 28px;
+      min-height: 28px;
+      flex: 0 0 48px;
+      transform: none;
+    }
+    #page-bot .studio-novel-switch-row .switch span,
+    #page-novels .novel-item .switch span {
+      top: 3px;
+      left: 3px;
+      width: 22px;
+      height: 22px;
+    }
+    #page-bot .studio-novel-switch-row .switch.on span,
+    #page-novels .novel-item .switch.on span { transform: translateX(20px); }
+    #page-novels .novel-item:hover { border-color: var(--studio-accent); background: var(--studio-wash); }
+    #page-novels .novel-item.is-enabled:hover { background: var(--studio-card); }
+    @media (max-width: 760px) {
+      body:not(.messages-workspace) #console-workspace :is(.studio-primary, .primary-button, .outline-button, .studio-system-link),
+      body:not(.messages-workspace) #console-workspace .studio-service-page :is(button:not(.switch), .outline-button, .primary-button) {
+        min-height: var(--studio-touch-height);
+      }
+      body:not(.messages-workspace) #console-workspace :is(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea) {
+        min-height: var(--studio-touch-height);
+        font-size: 16px;
+      }
+    }
 """

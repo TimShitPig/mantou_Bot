@@ -219,7 +219,7 @@
     }
     :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-group h3 { margin: 0 0 18px; padding-bottom: 13px; border-bottom: 1px solid var(--studio-border); font-size: 15px; }
     :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field label { font-size: 12px; }
-    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field small { font-size: 11px; }
+    :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-field small { font-size: 12px; }
     :is(#basic-config-editor, #zlibrary-registration-config-editor) .config-scope-label {
       display: inline-block;
       margin-inline-start: 6px;
@@ -265,16 +265,16 @@
     .admin-list-count { display: inline-flex; align-items: center; padding: 3px 8px; border: 1px solid var(--studio-border); border-radius: 999px; color: var(--studio-muted); background: var(--studio-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
     .admin-list-roster { display: grid; gap: 8px; max-height: 310px; overflow-y: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; }
     .admin-list-item { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 5px 6px 5px 10px; border: 1px solid var(--studio-border); border-radius: 9px; background: var(--studio-soft); }
-    .admin-list-index { flex: 0 0 auto; color: var(--studio-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+    .admin-list-index { flex: 0 0 auto; color: var(--studio-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     .admin-list-item code { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--studio-ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.6; }
-    .admin-list-remove { flex: 0 0 auto; min-height: 36px; min-width: 44px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--studio-muted); font: inherit; font-size: 11px; cursor: pointer; }
+    .admin-list-remove { flex: 0 0 auto; min-height: 44px; min-width: 44px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--studio-muted); font: inherit; font-size: 12px; cursor: pointer; }
     .admin-list-remove:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger); }
     .admin-list-remove:disabled { opacity: .5; cursor: default; }
     .admin-list-empty { margin: 0; padding: 20px 12px; border: 1px dashed var(--studio-border); border-radius: 9px; color: var(--studio-muted); font-size: 12px; text-align: center; }
     .admin-list-add { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; min-width: 0; }
     .admin-list-add input { flex: 1; min-width: 0; }
     .admin-list-add .outline-button { flex: 0 0 auto; min-height: 44px; padding-inline: 14px; white-space: nowrap; }
-    .admin-list-feedback { margin: 0; color: var(--studio-muted); font-size: 11px; line-height: 1.6; }
+    .admin-list-feedback { margin: 0; color: var(--studio-muted); font-size: 12px; line-height: 1.6; }
     .admin-list-feedback.is-error { color: var(--danger); }
     .admin-list-feedback:empty { display: none; }
     .admin-list-remove:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
@@ -339,7 +339,7 @@
     .qq-api-keys { display: grid; gap: 16px; padding: var(--service-inset); min-width: 0; }
     .qq-api-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .qq-api-toolbar h4 { margin: 0 0 5px; font-size: 13px; color: var(--studio-ink); }
-    .qq-api-toolbar small { color: var(--studio-muted); font-size: 11px; }
+    .qq-api-toolbar small { color: var(--studio-muted); font-size: 12px; }
     .qq-api-card .outline-button,
     .qq-api-card [data-config-save] { min-height: 44px; padding: 8px 14px; border-radius: 8px; white-space: nowrap; }
     .qq-api-card .outline-button { border-color: var(--studio-border); background: var(--studio-card); color: var(--studio-ink); }
@@ -355,7 +355,7 @@
     .qq-api-created { padding: 14px; border: 1px solid var(--studio-accent); border-radius: 9px; background: var(--studio-accent-soft); }
     .qq-api-created[hidden] { display: none; }
     .qq-api-created strong { color: var(--studio-accent); font-size: 13px; }
-    .qq-api-created p { margin: 5px 0 10px; color: var(--studio-muted); font-size: 11px; }
+    .qq-api-created p { margin: 5px 0 10px; color: var(--studio-muted); font-size: 12px; }
     .qq-api-copy { display: flex; align-items: stretch; gap: 8px; }
     .qq-api-card input[data-api-key-created],
     .qq-api-import textarea { min-width: 0; width: 100%; padding: 10px 12px; border: 1px solid var(--studio-border); border-radius: 8px; background: var(--studio-card); color: var(--studio-ink); font-family: ui-monospace, monospace; font-size: 12px; }
@@ -363,11 +363,11 @@
     .qq-api-import { border-top: 1px solid var(--studio-border); }
     .qq-api-import summary { width: fit-content; padding: 12px 0 0; color: var(--studio-muted); font-size: 12px; cursor: pointer; }
     .qq-api-import > div { display: grid; gap: 9px; padding-top: 12px; }
-    .qq-api-import label { color: var(--studio-muted); font-size: 11px; line-height: 1.6; }
+    .qq-api-import label { color: var(--studio-muted); font-size: 12px; line-height: 1.6; }
     .qq-api-import textarea { resize: vertical; min-height: 92px; }
     .qq-api-keys > .config-message:empty { display: none; }
     .qq-api-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px var(--service-inset); border-top: 1px solid var(--studio-border); background: color-mix(in srgb, var(--studio-soft) 45%, transparent); border-radius: 0 0 11px 11px; }
-    .qq-api-footer small { color: var(--studio-muted); font-size: 11px; }
+    .qq-api-footer small { color: var(--studio-muted); font-size: 12px; }
     .qq-api-footer > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-left: auto; }
     @media (max-width: 560px) {
       .qq-api-header { align-items: stretch; flex-direction: column; gap: 12px; padding: 16px; }

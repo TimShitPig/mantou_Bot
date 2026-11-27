@@ -254,11 +254,11 @@
       .studio-robot small { font-size:10px; }
       .studio-sidebar-actions { grid-area:1 / 2; align-self:center; }
       .messages-workspace .studio-sidebar-actions { margin-top:0; }
-      .studio-exit { padding-inline:7px; min-height:34px; font-size:11px; }
-      .studio-nav { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px 8px; overflow:visible; padding:0; }
+      .studio-exit { padding-inline:7px; min-height:44px; font-size:12px; }
+      .studio-nav { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; overflow:visible; padding:0; }
       .studio-nav-group { display:flex; flex-wrap:wrap; gap:4px; }
       .studio-nav-group > p { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
-      .studio-nav-group a { min-height:34px; padding:4px 6px; gap:4px; font-size:12px; }
+      .studio-nav-group a { min-height:44px; padding:6px 8px; gap:5px; font-size:12px; }
       .studio-nav-icon { width:22px; height:22px; border-radius:6px; }
       .studio-nav-icon svg { width:14px; height:14px; }
       .messages-workspace .studio-message-tools { display:flex; flex:none; gap:5px; }
@@ -266,8 +266,8 @@
       body:not(.messages-workspace) .topbar .brand-mark svg { width:22px; height:22px; }
       body:not(.messages-workspace) .shell > .topbar { gap:5px; min-height:47px; padding-inline:1px; }
       body:not(.messages-workspace) .topbar .theme-toggle-button,
-      body:not(.messages-workspace) .topbar .admin-chip { min-height:36px; }
-      body:not(.messages-workspace) .topbar .theme-toggle-button { width:36px; }
+      body:not(.messages-workspace) .topbar .admin-chip { min-height:44px; }
+      body:not(.messages-workspace) .topbar .theme-toggle-button { width:44px; }
       body:not(.messages-workspace) .topbar #admin-name { max-width:65px; }
     }
     @media (max-width:470px) {
