@@ -53,7 +53,7 @@
       line-height: 1.25;
       letter-spacing: .01em;
     }
-    .dash-metric span { display: block; margin-top: 4px; color: var(--studio-muted); font-size: 11px; letter-spacing: .1em; }
+    .dash-metric span { display: block; margin-top: 4px; color: var(--studio-muted); font-size: 12px; letter-spacing: .1em; }
     .dash-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: auto; }
     .dash-actions .studio-primary { margin: 0; }
     .dash-actions .outline-button {
@@ -131,7 +131,7 @@
       padding-bottom: 12px;
     }
     .dash-biz-head h2 { margin: 0; font-family: var(--brand-serif); font-size: 19px; font-weight: 700; letter-spacing: .02em; }
-    .dash-biz-head p { margin: 5px 0 0; color: var(--studio-muted); font-size: 11.5px; }
+    .dash-biz-head p { margin: 5px 0 0; color: var(--studio-muted); font-size: 12px; }
     .dash-biz-tag {
       padding: 4px 9px;
       border: 1px solid #1c66503d;
@@ -149,6 +149,10 @@
       gap: 14px;
       padding: 13px 0;
       border-bottom: 1px dotted var(--studio-border);
+      border-radius: 8px;
+      color: inherit;
+      text-decoration: none;
+      transition: background .16s ease;
     }
     .dash-biz-row:last-child { border-bottom: 0; padding-bottom: 4px; }
     .dash-biz-index {
@@ -158,25 +162,24 @@
       letter-spacing: .06em;
     }
     .dash-biz-copy h3 { margin: 0; font-size: 13.5px; font-weight: 640; letter-spacing: .01em; }
-    .dash-biz-copy small { display: block; margin-top: 2px; color: var(--studio-muted); font-size: 11.5px; }
-    .dash-biz-note { color: var(--studio-muted); font-size: 11.5px; white-space: nowrap; }
-    .dash-biz-row > button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+    .dash-biz-copy small { display: block; margin-top: 2px; color: var(--studio-muted); font-size: 12px; }
+    .dash-biz-note { color: var(--studio-muted); font-size: 12px; white-space: nowrap; }
+    .dash-biz-row-arrow {
+      display: grid;
+      place-items: center;
       width: 30px;
       height: 30px;
       border: 1px solid var(--studio-border);
       border-radius: 50%;
       background: transparent;
       color: var(--studio-muted);
-      cursor: pointer;
     }
-    .dash-biz-row > button svg { width: 15px; height: 15px; }
-    .dash-biz-row > button:hover { border-color: var(--studio-accent); color: var(--studio-accent); }
+    .dash-biz-row-arrow svg { width: 15px; height: 15px; }
+    .dash-biz-row:hover .dash-biz-row-arrow { border-color: var(--studio-accent); color: var(--studio-accent); }
+    .dash-biz-row:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
     .dash-guide {
       display: grid;
-      grid-template-columns: 32px minmax(0, 1fr) 30px;
+      grid-template-columns: 32px minmax(0, 1fr) 44px;
       align-items: center;
       gap: 12px;
       padding: 16px clamp(18px, 2vw, 24px);
@@ -199,13 +202,19 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 30px;
-      height: 30px;
+      width: 44px;
+      height: 44px;
       border: 1px solid var(--studio-border);
       border-radius: 6px;
       color: var(--studio-muted);
     }
     .dash-guide > a svg { width: 15px; height: 15px; }
+    body:not(.messages-workspace) .studio-nav-group a { min-height: 44px; }
+    body:not(.messages-workspace) .studio-exit { min-height: 44px; }
+    body:not(.messages-workspace) .topbar .theme-toggle-button { width: 44px; min-height: 44px; }
+    body:not(.messages-workspace) .topbar .admin-chip { min-height: 44px; }
+    body:not(.messages-workspace) .dash-actions .studio-primary,
+    body:not(.messages-workspace) .dash-actions .outline-button { min-height: 44px; }
     @media (max-width: 900px) {
       .dash-top { grid-template-columns: minmax(0, 1fr); }
     }

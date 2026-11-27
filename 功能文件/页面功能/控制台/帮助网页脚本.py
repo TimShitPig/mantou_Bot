@@ -8,7 +8,7 @@
       const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
       const themeStorageKey = 'mantou-theme';
       const readThemePreference = () => { try { return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light'; } catch (_) { return 'light'; } };
-      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); const color = theme === 'dark' ? '#19171f' : '#f6f5f8'; if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color); };
+      const updateThemeMeta = (theme) => { const meta = document.querySelector('meta[name="theme-color"]'); const color = theme === 'dark' ? '#141310' : '#f4efe4'; if (meta && meta.getAttribute('content') !== color) meta.setAttribute('content', color); };
       const updateThemeControl = (theme) => {
         const dark = theme === 'dark';
         const label = dark ? '切换到浅色模式' : '切换到深色模式';

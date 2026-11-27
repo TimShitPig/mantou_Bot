@@ -108,10 +108,10 @@ def _导航分组(标题: str, 链接: tuple) -> str:
 
 def _总览业务行(序号: int, 页面: str, 名称: str, 摘要: str, 说明: str, 操作: str) -> str:
     return (
-        f'<div class="dash-biz-row"><span class="dash-biz-index">{序号:02d}</span>'
+        f'<a class="dash-biz-row" href="?view={页面}" data-view="{页面}" aria-label="{操作}"><span class="dash-biz-index">{序号:02d}</span>'
         f'<div class="dash-biz-copy"><h3>{名称}</h3><small id="{摘要}">读取中</small></div>'
         f'<span class="dash-biz-note">{说明}</span>'
-        f'<button type="button" data-view="{页面}" aria-label="{操作}" title="{操作}">{_图标("next")}</button></div>'
+        f'<span class="dash-biz-row-arrow" aria-hidden="true">{_图标("next")}</span></a>'
     )
 
 
