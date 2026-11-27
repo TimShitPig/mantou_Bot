@@ -530,7 +530,7 @@
       .pan-object-copy strong { overflow:hidden; color:var(--ink); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
       .pan-object-copy small { overflow-wrap:anywhere; color:var(--muted); font-size:10px; white-space:normal; }
       .pan-object-copy .pan-account-meta { display:grid; grid-template-columns:minmax(0,1fr); gap:3px; overflow:visible; color:var(--soft); font-size:10px; font-weight:600; line-height:1.35; white-space:normal; }
-      .pan-account-meta > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .pan-account-meta > span { min-width:0; overflow:visible; overflow-wrap:anywhere; text-overflow:clip; white-space:normal; }
       .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; transition:transform .18s ease; }
       .pan-account-object:hover .pan-object-arrow { transform:translateX(2px); }
       .pan-account-card-actions { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:8px 1px 0; border-top:1px solid var(--line); }
