@@ -97,6 +97,17 @@ def 被动回复已过期(异常: Any) -> bool:
     )
 
 
+def 被动回复ID无效(异常: Any) -> bool:
+    """仅识别 QQ 明确拒绝的无效被动 msg_id，不把未知发送结果当拒绝。"""
+    字段 = 提取QQ消息错误字段(异常)
+    if any(字段[键] not in (None, 0) for 键 in ("code", "err_code")):
+        return 40034024 in (字段["code"], 字段["err_code"])
+    文本 = str(getattr(异常, "msgs", None) or 异常).strip().lower()
+    return len(文本) <= 1024 and any(字 in 文本 for 字 in ("msg_id", "msgid", "消息id", "消息 id")) and any(
+        字 in 文本 for 字 in ("无效", "越权", "invalid", "unauthorized")
+    )
+
+
 def QQ消息错误分类(异常: Any) -> str:
     字段 = 提取QQ消息错误字段(异常)
     状态 = 字段["http_status"]
@@ -125,6 +136,22 @@ def QQ消息错误分类(异常: Any) -> str:
     if isinstance(异常, QQ消息发送错误) and 异常.reason not in {"http_error", "business_error"}:
         return 异常.reason
     return "request_failed"
+
+
+def QQ发送结果未知(异常: Any) -> bool:
+    """保守判断 POST 结果是否可能已提交，避免让网页重试造成重复消息。"""
+    if isinstance(异常, QQ消息发送错误):
+        if 异常.reason in {"network", "timeout", "invalid_json", "invalid_response", "response_too_large"}:
+            return True
+        if 异常.status is not None:
+            return 异常.status >= 500
+        if 异常.reason in {"business_error", "invalid_route", "invalid_reply", "auth_mismatch"}:
+            return False
+    字段 = 提取QQ消息错误字段(异常)
+    状态 = 字段["http_status"]
+    if 状态 is not None:
+        return 状态 >= 500 or 200 <= 状态 < 300
+    return True
 
 
 async def 提交QQ消息(http: Any, route: Any, payload: dict[str, Any], appid: str) -> dict[str, Any]:

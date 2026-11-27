@@ -4621,6 +4621,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
     if not _请求已授权(request):
         return _控制台错误(401, "请先登录控制台")
     临时媒体路径: Path | None = None
+    发送处理已调用 = False
     try:
         数据, 临时媒体路径 = await _读取消息发送请求(request)
         if not 数据:
@@ -4633,6 +4634,7 @@ async def _处理消息发送(request: web.Request) -> web.Response:
             return _控制台错误(400, "会话参数无效")
         from 功能文件.管理功能.基础功能 import 消息记录
 
+        发送处理已调用 = True
         结果 = await 消息记录.发送消息(
             会话标识,
             消息类型,
@@ -4665,12 +4667,20 @@ async def _处理消息发送(request: web.Request) -> web.Response:
             卡片字段=数据.get("card") if isinstance(数据.get("card"), dict) else None,
         )
         if not 结果.get("ok"):
-            return _控制台错误(409, str(结果.get("message") or "发送失败"))
+            return web.json_response({
+                "ok": False,
+                "error": str(结果.get("message") or "发送失败"),
+                "outcome_unknown": bool(结果.get("outcome_unknown")),
+            }, status=409)
         清理消息列表缓存()
         return web.json_response({"ok": True, **结果})
     except Exception as exc:
         logger.warning("帮助控制台消息发送失败：错误类型=%s", type(exc).__name__)
-        return _控制台错误(409, "发送失败，请稍后再试")
+        return web.json_response({
+            "ok": False,
+            "error": "发送结果暂不明确，请刷新确认，勿重复发送" if 发送处理已调用 else "发送失败，请检查消息后重试",
+            "outcome_unknown": 发送处理已调用,
+        }, status=409)
     finally:
         if 临时媒体路径 is not None:
             try:

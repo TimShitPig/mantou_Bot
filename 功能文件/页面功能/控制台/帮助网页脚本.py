@@ -233,6 +233,19 @@
         toastTimer = setTimeout(() => { node.classList.remove('show'); if (node.parentElement !== document.body) document.body.appendChild(node); }, 2200);
       };
       const api = async (path, options = {}) => {
+        let requestStarted = false;
+        const markRequestState = (error, started) => {
+          if (error && (typeof error === 'object' || typeof error === 'function')) {
+            try { error.requestStarted = started; if (error.requestStarted === started) return error; } catch (_) {}
+            const tagged = new Error(String(error.message || '请求失败'));
+            tagged.name = String(error.name || 'Error');
+            tagged.requestStarted = started;
+            if (Number.isInteger(error.status)) tagged.status = error.status;
+            if (error.data && typeof error.data === 'object') tagged.data = error.data;
+            return tagged;
+          }
+          return error;
+        };
         const {botAppid, scopeCleanup, ...fetchOptions} = options;
         const requestOptions = { cache:'no-store', credentials:'same-origin', ...fetchOptions };
         const url = new URL(`/api/${path}`, location.origin);
@@ -243,20 +256,22 @@
         // 清理旧机器人的扫码会话也固定原 AppID，不借用切换后的账号。
         const cleanup = scopeCleanup === true && requestOptions.method === 'DELETE';
         if (scoped) {
-          if (!/^\d{4,32}$/.test(requestAppid)) throw new Error('请先选择机器人');
+          if (!/^\d{4,32}$/.test(requestAppid)) throw markRequestState(new Error('请先选择机器人'), false);
           if ((url.searchParams.has('appid') && url.searchParams.get('appid') !== requestAppid)
-            || (!cleanup && requestAppid !== consoleAppid)) throw new DOMException('机器人已切换', 'AbortError');
+            || (!cleanup && requestAppid !== consoleAppid)) throw markRequestState(new DOMException('机器人已切换', 'AbortError'), false);
           url.searchParams.set('appid', requestAppid);
         }
         const scopedMessage = endpoint.startsWith('message/') && endpoint !== 'message/layout'
           && !['GET','HEAD'].includes(String(requestOptions.method || 'GET').toUpperCase());
         if (scopedMessage) {
           const form = requestOptions.body instanceof FormData;
-          const payload = form ? requestOptions.body : JSON.parse(requestOptions.body || '{}');
+          let payload;
+          try { payload = form ? requestOptions.body : JSON.parse(requestOptions.body || '{}'); }
+          catch (error) { throw markRequestState(error, false); }
           const read = (key) => form ? payload.get(key) : payload[key];
           const write = (key, value) => { if (form) payload.set(key, value); else payload[key] = value; };
           const appid = String(read('appid') || requestAppid).trim();
-          if (appid !== requestAppid) throw new DOMException('机器人已切换', 'AbortError');
+          if (appid !== requestAppid) throw markRequestState(new DOMException('机器人已切换', 'AbortError'), false);
           write('appid', appid);
           if (read('chat_id') && !read('chat_type')) {
             const chat = msgState.chats.find((item) => item.chat_id === String(read('chat_id')) && item.appid === appid);
@@ -276,6 +291,7 @@
           consoleRequests.add(controller);
         }
         try {
+          requestStarted = true;
           const response = await fetch(url.pathname + url.search, requestOptions);
           const data = await response.json().catch(() => ({ok:false,error:'服务器返回格式错误'}));
           if (scoped && !cleanup && (requestGeneration !== consoleGeneration || requestAppid !== consoleAppid)) throw new DOMException('机器人已切换', 'AbortError');
@@ -283,8 +299,10 @@
           if (!response.ok || !data.ok) { const error = new Error(data.message || data.error || '请求失败'); error.status = response.status; error.data = data; throw error; }
           return data;
         } catch (error) {
-          if (scoped && !cleanup && (requestGeneration !== consoleGeneration || requestAppid !== consoleAppid)) throw new DOMException('机器人已切换', 'AbortError');
-          throw error;
+          if (scoped && !cleanup && (requestGeneration !== consoleGeneration || requestAppid !== consoleAppid)) {
+            throw markRequestState(new DOMException('机器人已切换', 'AbortError'), requestStarted);
+          }
+          throw markRequestState(error, requestStarted);
         } finally {
           if (controller) consoleRequests.delete(controller);
           fetchOptions.signal?.removeEventListener('abort', cancel);
@@ -2613,7 +2631,7 @@
       const msgHistoryPrefetch = new Map();
       const msgHistoryRetryDelays = [300, 900];
       let msgHistoryEdgeIntent = null;
-      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', recalledOnly:false, grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', composerAttachment:null, mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
+      const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', recalledOnly:false, grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], eventKeyPrimaryIds:new Map(), adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', composerAttachment:null, mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
         if (!button) return;
@@ -2915,6 +2933,8 @@
           }, () => queueMsgLayoutSave());
         });
         composerResizer?.addEventListener('pointerdown', (event) => {
+          // 移动端使用自动高度布局；禁止无效拖动改写桌面端保存值。
+          if (window.matchMedia?.('(max-width: 760px)').matches) return;
           const bottom = shell.getBoundingClientRect().bottom;
           finishPointer(event, (nextEvent) => {
             applyMsgLayout({...msgLayout, composerHeight:bottom - nextEvent.clientY, composerCollapsed:false}, false);
@@ -3870,7 +3890,7 @@
         if ($('jinjiang-detail')) $('jinjiang-detail').replaceChildren();
         switchMsgBotScope(''); setMsgMobileChatOpen(false);
         msgState.historyCache.clear(); msgState.readInFlight.clear(); msgReadAgain.clear(); msgReadOverrides.clear(); msgState.optimisticSends.clear();
-        msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.sending = false;
+        msgState.eventKeys.clear(); msgState.eventKeyOrder = []; msgState.eventKeyPrimaryIds.clear(); msgState.sending = false;
         if (msgLayout.saveTimer) clearTimeout(msgLayout.saveTimer);
         msgLayout.saveTimer = null; msgLayout.loaded = false; msgLayout.persisted = false; applyMsgLayout();
         window.msgBotProfile = {};
@@ -6301,19 +6321,20 @@
       const normalizeMsgIdentity = (value) => String(value ?? '')
         .replace(/[\u200b-\u200d\ufeff]/g, '')
         .trim();
+      const msgExplicitMessageId = (message) => normalizeMsgIdentity(message?.message_id ?? message?.messageId);
       const msgMessageKey = (message) => normalizeMsgIdentity(
         message?.message_id ?? message?.messageId ?? message?.id,
       );
-       const msgIdentityHash = (value) => {
-         let hash = 2166136261;
-         const text = String(value || '');
-         for (let index = 0; index < text.length; index += 1) {
-           hash ^= text.charCodeAt(index);
-           hash = Math.imul(hash, 16777619);
-         }
-         return (hash >>> 0).toString(16).padStart(8, '0');
-       };
-       const msgMessageIdentityKeys = (message) => {
+      const msgIdentityHash = (value) => {
+        let hash = 2166136261;
+        const text = String(value || '');
+        for (let index = 0; index < text.length; index += 1) {
+          hash ^= text.charCodeAt(index);
+          hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(16).padStart(8, '0');
+      };
+      const msgMessageIdentityKeys = (message) => {
         if (!message || typeof message !== 'object') return [];
         const keys = [];
         const primary = msgMessageKey(message);
@@ -6347,15 +6368,55 @@
           }
           const directSequence = normalizeMsgIdentity(message.msg_seq);
           if (directSequence && sessionId) keys.push(`seq:${sessionId}:${userId}:msg_seq:${directSequence}`);
-          // 回调负载相同但适配器 ID 不同时，仍按事件内容合并。
+          // 原始内容指纹只作为无可靠 ID/序号时的兜底；不能吞掉同文不同 ID 的消息。
           const raw = String(message.raw_message || '').trim();
-          if (raw && sessionId && !raw.endsWith('...[已截断]')) keys.push(`raw:${sessionId}:${userId}:${msgIdentityHash(raw)}`);
+          if (!keys.length && raw && sessionId && !raw.endsWith('...[已截断]')) keys.push(`raw:${sessionId}:${userId}:${msgIdentityHash(raw)}`);
         }
         return keys;
       };
       const msgMessagesMatch = (left, right) => {
+        const leftId = msgExplicitMessageId(left);
+        const rightId = msgExplicitMessageId(right);
+        if (leftId && rightId && leftId !== rightId) return false;
+        const leftKeys = msgMessageIdentityKeys(left);
         const rightKeys = new Set(msgMessageIdentityKeys(right));
-        return msgMessageIdentityKeys(left).some((key) => rightKeys.has(key));
+        return leftKeys.some((key) => rightKeys.has(key));
+      };
+      const msgMessageSortTimestamp = (message) => {
+        const seconds = Number(message?.ts || 0);
+        if (Number.isFinite(seconds) && seconds > 0) return seconds;
+        const raw = String(message?.timestamp || '').trim();
+        const numeric = Number(raw);
+        if (raw && Number.isFinite(numeric) && numeric > 0) return numeric;
+        const parsed = Date.parse(raw);
+        return Number.isFinite(parsed) ? parsed / 1000 : 0;
+      };
+      const sortMsgMessagesByHistoryOrder = (messages) => {
+        const entries = (Array.isArray(messages) ? messages : [])
+          .map((message, index) => ({
+            message,
+            index,
+            ts:msgMessageSortTimestamp(message),
+            rowId:Number(message?.id || 0),
+            sequence:String(message?.source || '').trim().toLowerCase() === 'qq_official'
+              ? Number(message?.msg_seq || 0) : 0,
+          }))
+          .sort((left, right) => left.ts - right.ts || left.index - right.index);
+        // 同秒消息只有在整组都有同一种可比顺序键时才重排，避免混用 seq/数据库行号产生非传递比较。
+        for (let start = 0; start < entries.length;) {
+          let end = start + 1;
+          while (end < entries.length && entries[end].ts === entries[start].ts) end += 1;
+          const group = entries.slice(start, end);
+          const allHaveSequence = group.length > 1 && group.every((entry) =>
+            Number.isSafeInteger(entry.sequence) && entry.sequence > 0);
+          const allHaveRowId = group.length > 1 && group.every((entry) =>
+            Number.isSafeInteger(entry.rowId) && entry.rowId > 0);
+          if (allHaveSequence) group.sort((left, right) => left.sequence - right.sequence || left.index - right.index);
+          else if (allHaveRowId) group.sort((left, right) => left.rowId - right.rowId || left.index - right.index);
+          entries.splice(start, group.length, ...group);
+          start = end;
+        }
+        return entries.map((entry) => entry.message);
       };
       const msgIsRecalled = (message) => {
         const value = message?.recalled;
@@ -6525,7 +6586,8 @@
         const result = [];
         (Array.isArray(messages) ? messages : []).forEach((message) => {
           const keys = msgMessageIdentityKeys(message);
-          const duplicateIndex = keys.map((key) => seen.get(key)).find((index) => Number.isInteger(index));
+          const duplicateIndex = keys.map((key) => seen.get(key))
+            .find((index) => Number.isInteger(index) && msgMessagesMatch(result[index], message));
           if (!keys.length || !Number.isInteger(duplicateIndex)) {
             const index = result.length;
             keys.forEach((key) => seen.set(key, index));
@@ -6694,16 +6756,26 @@
             renderOptimisticMessages(entry.chatId);
           }, 15000);
         } catch (error) {
-          entry.status = 'failed';
-          entry.message.send_status = 'failed';
+          const backendOutcome = error?.data?.outcome_unknown;
+          const outcomeUnknown = typeof backendOutcome === 'boolean'
+            ? backendOutcome
+            : error?.requestStarted === false ? false
+              : error?.requestStarted === true
+                ? (error?.name === 'AbortError' || !Number.isInteger(error?.status)
+                  || error.status >= 500 || (error.status >= 200 && error.status < 300))
+                : true;
+          entry.status = outcomeUnknown ? 'unknown' : 'failed';
+          entry.message.send_status = entry.status;
           entry.error = error;
           renderOptimisticMessages(entry.chatId);
-          if (msgMatchesCurrent(entry.chatType, entry.chatId, entry.payload.appid)) toast('发送失败，点击感叹号重试');
+          if (msgMatchesCurrent(entry.chatType, entry.chatId, entry.payload.appid)) {
+            toast(outcomeUnknown ? '发送结果暂不明确，请刷新确认，勿重复发送' : '发送失败，点击感叹号重试');
+          }
         }
       };
       const retryOptimisticSend = (id) => {
         const entry = msgState.optimisticSends.get(String(id || ''));
-        if (!entry || entry.status === 'pending') return;
+        if (!entry || entry.status !== 'failed') return;
         if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
         entry.status = 'pending';
         entry.message.send_status = 'pending';
@@ -7802,7 +7874,7 @@
           references:{...(previousData.references || {}), ...(data.references || {})},
         };
         if (msgState.chatType === 'user') data = {...data, ...syncMsgFriendState(msgState.chatId, data)};
-        let serverMessages = mergeMsgRecalledStates(dedupeMsgMessages(data.messages || []));
+        let serverMessages = sortMsgMessagesByHistoryOrder(mergeMsgRecalledStates(dedupeMsgMessages(data.messages || [])));
         if (msgState.recalledOnly) serverMessages = serverMessages.filter(msgIsRecalled);
         const keepOlder = scroll.prepend || (!keepLatestVisible && !opening && !msgState.historyWindow && !scroll.toBottom);
         const viewport = scroll.viewportReady || msgState.historyWindow || msgQuoteJump.pending || msgQuoteJump.anchorAbort
@@ -8052,7 +8124,7 @@
           const hasRawMessage = typeof m.raw_message === 'string'
             ? Boolean(m.raw_message.trim())
             : m.raw_message !== undefined && m.raw_message !== null && m.raw_message !== false;
-          const outgoingSnapshot = isSelf && !hasRawMessage && !['pending', 'failed'].includes(sendState)
+          const outgoingSnapshot = isSelf && !hasRawMessage && !['pending', 'failed', 'unknown'].includes(sendState)
             ? createOutgoingRecordSnapshot(m)
             : null;
           const hasRawData = hasRawMessage || Boolean(outgoingSnapshot);
@@ -8064,7 +8136,9 @@
           const multiEnabled = canRecall;
           const sendStateHtml = failedSend
             ? `<button class="msg-send-error" data-msg-retry="${esc(optimisticId)}" type="button" title="发送失败，点击重试" aria-label="发送失败，点击重试">!</button>`
-            : '';
+            : sendState === 'unknown'
+              ? '<span class="msg-send-unknown" role="status" title="发送结果暂不明确，请刷新确认；不要重复发送">待确认</span>'
+              : '';
           const muteStatusHtml = isMuted
             ? `<span class="msg-mute-countdown" data-msg-mute-expire="${muteExpireTs}">${muteExpireTs ? `禁言剩余 ${formatMuteRemaining(muteExpireTs)}` : '已禁言'}</span>`
             : '';
@@ -8166,19 +8240,36 @@
           });
         });
       };
-      const rememberMsgEvent = (chatId, message) => {
+      const msgEventIdentityKeys = (chatId, message) => {
         const fallback = `${message?.ts || message?.timestamp || ''}:${message?.user_id || ''}:${message?.content || ''}`;
         const keys = msgMessageIdentityKeys(message);
         if (!keys.length) keys.push(`fallback:${fallback}`);
-        const eventKeys = keys.map((key) => `${msgScopeKey(message.chat_type || msgState.chatType, chatId, message.appid || msgState.selectedAppid)}:${key}`);
-        if (eventKeys.some((key) => msgState.eventKeys.has(key))) return false;
+        return keys.map((key) => `${msgScopeKey(message.chat_type || msgState.chatType, chatId, message.appid || msgState.selectedAppid)}:${key}`);
+      };
+      const msgEventWasSeen = (chatId, message) => {
+        const primaryId = msgExplicitMessageId(message) || msgMessageKey(message);
+        return msgEventIdentityKeys(chatId, message).some((key) => {
+          if (!msgState.eventKeys.has(key)) return false;
+          const previousId = msgState.eventKeyPrimaryIds.get(key) || '';
+          return !(primaryId && previousId && primaryId !== previousId);
+        });
+      };
+      const rememberMsgEvent = (chatId, message) => {
+        const eventKeys = msgEventIdentityKeys(chatId, message);
+        const primaryId = msgExplicitMessageId(message) || msgMessageKey(message);
+        if (eventKeys.some((key) => {
+          if (!msgState.eventKeys.has(key)) return false;
+          const previousId = msgState.eventKeyPrimaryIds.get(key) || '';
+          return !(primaryId && previousId && primaryId !== previousId);
+        })) return false;
         eventKeys.forEach((key) => {
           msgState.eventKeys.add(key);
+          if (primaryId) msgState.eventKeyPrimaryIds.set(key, primaryId);
           msgState.eventKeyOrder.push(key);
         });
         while (msgState.eventKeyOrder.length > 1000) {
           const oldest = msgState.eventKeyOrder.shift();
-          if (oldest) msgState.eventKeys.delete(oldest);
+          if (oldest) { msgState.eventKeys.delete(oldest); msgState.eventKeyPrimaryIds.delete(oldest); }
         }
         return true;
       };
@@ -8210,7 +8301,7 @@
           const followLatest = shouldFollow && msgBodyNearBottom(body);
           renderMsgMessages(
             {...(msgState.historyData || {}), messages:msgState.messages},
-            {previousTop, previousHeight, toBottom:followLatest},
+            {previousTop, previousHeight, toBottom:followLatest, preserveAnchor:!followLatest},
           );
           if (!followLatest && count > 0) showMsgNewMessages(count);
         }, 50);
@@ -8370,7 +8461,7 @@
         } else if (isNewEvent && (msgState.historyWindow || msgQuoteJump.pending)) {
           showMsgNewMessages(1);
         } else if (isNewEvent) {
-          msgState.messages = [...msgState.messages, realtimeMessage];
+          msgState.messages = sortMsgMessagesByHistoryOrder([...msgState.messages, realtimeMessage]);
           scheduleMsgRealtimeMessageRender(chatId, followLatest);
         }
         if (isNewEvent && followLatest) markMsgRead(chatId, true, chatType, eventAppid);
@@ -8639,7 +8730,7 @@
         const previousLast = msgState.renderedChatId === requestChatId
           ? msgMessageKey(msgState.messages[msgState.messages.length - 1]) : '';
         const historyCacheKey = msgScopeKey(requestChatType, requestChatId, requestAppid);
-        const messagesAtRequest = new Set(msgState.messages.map(msgMessageKey));
+        const messagesAtRequest = msgState.messages.map((message) => ({...message}));
         let loadedPage = false;
         let requesting = true;
         try {
@@ -8692,17 +8783,23 @@
             }
             return;
           }
+          const currentMessages = Array.isArray(msgState.messages) ? msgState.messages : [];
+          const concurrentMessages = currentMessages.filter((message) => {
+            const before = messagesAtRequest.find((snapshot) => msgMessagesMatch(snapshot, message));
+            return !before || JSON.stringify(before) !== JSON.stringify(message);
+          });
           let newCount = 0;
           if (!older && previousLast) {
-            const previousIndex = incoming.findIndex((message) => msgMessageKey(message) === previousLast);
-            newCount = previousIndex >= 0 ? Math.max(0, incoming.length - previousIndex - 1) : (incoming.length ? 1 : 0);
+            newCount = incoming.filter((message) =>
+              !messagesAtRequest.some((snapshot) => msgMessagesMatch(snapshot, message))
+              && !currentMessages.some((current) => msgMessagesMatch(current, message))
+              && !msgEventWasSeen(requestChatId, message)).length;
           }
           const renderTop = body?.scrollTop ?? previousTop;
           const renderHeight = body?.scrollHeight ?? previousHeight;
           const renderNearBottom = forceInitialBottom || Boolean(returningWindow) || newChat
             || (!msgState.bottomFollowPaused && (body?.classList.contains('msg-follow-bottom') || msgBodyNearBottom(body)));
           // 轮询可能在上翻页完成后才返回；保留当前已展开的更早消息，避免刷新把它们截掉。
-          const currentMessages = Array.isArray(msgState.messages) ? msgState.messages : [];
           const preserveLoadedHistory = !returningWindow && !older && !newChat && currentMessages.length > incoming.length;
           if (quiet && preserveLoadedHistory && msgState.historyData && !msgState.historyData.has_more) {
             data.has_more = false;
@@ -8711,10 +8808,12 @@
           if (returningWindow) msgState.historyWindow = null;
           msgState.messages = older
             ? dedupeMsgMessages([...incoming, ...currentMessages])
-            : returningWindow ? incoming
+            : returningWindow ? dedupeMsgMessages([...incoming, ...concurrentMessages])
             : (authoritative || smallPage)
-              ? dedupeMsgMessages([...incoming, ...currentMessages.filter((message) => !messagesAtRequest.has(msgMessageKey(message)))])
-              : ((preserveLoadedHistory || preserveAfterClear) ? dedupeMsgMessages([...currentMessages, ...incoming]) : incoming);
+              ? dedupeMsgMessages([...incoming, ...concurrentMessages])
+              : ((preserveLoadedHistory || preserveAfterClear)
+                ? dedupeMsgMessages([...currentMessages, ...incoming])
+                : dedupeMsgMessages([...incoming, ...concurrentMessages]));
           renderMsgMessages(
             {...data, messages: msgState.messages},
             {
@@ -8722,6 +8821,7 @@
               previousTop:renderTop,
               previousHeight:renderHeight,
               toBottom:!older && renderNearBottom,
+              preserveAnchor:!older && !renderNearBottom,
             },
           );
           if (forceInitialBottom) {

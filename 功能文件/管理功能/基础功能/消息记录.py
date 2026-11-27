@@ -48,7 +48,10 @@ except Exception as 导入异常:
     logger.warning("消息记录存储模块加载失败：错误类型=%s", type(导入异常).__name__)
 
 from 功能文件.管理功能.基础功能.消息工具 import 是本地系统消息
-from .QQ官方消息发送 import 主动消息权限被拒绝, 被动回复已过期
+from .QQ官方消息发送 import (
+    主动消息权限被拒绝, 被动回复已过期, 被动回复ID无效,
+    提交QQ消息, QQ消息错误分类, QQ发送结果未知,
+)
 
 消息记录版本 = 1
 # 以下仅限制内存热点缓存；MySQL 历史不按数量/时间自动删除。
@@ -10123,7 +10126,7 @@ async def 发送消息(
                 "/v2/groups/{group_openid}/messages",
                 group_openid=会话标识,
             )
-        结果 = await _http.request(route, json=消息体)
+        结果 = await 提交QQ消息(_http, route, 消息体, appid)
         if 实际使用主动消息:
             记录主动消息权限(会话标识, 权限会话类型, True, appid)
     except Exception as exc:
@@ -10132,19 +10135,32 @@ async def 发送消息(
             return 资源失败结果
         if 实际使用主动消息 and 主动消息无权限(exc):
             记录主动消息权限(会话标识, 权限会话类型, False, appid)
+        错误字段 = {
+            "http_status": getattr(exc, "status", None),
+            "code": getattr(exc, "code", None),
+            "err_code": getattr(exc, "err_code", None),
+        }
         logger.warning(
-            "消息记录发送失败：错误类型=%s，错误详情=%s",
-            type(exc).__name__,
-            str(exc)[:400],
+            "消息记录发送失败：错误类型=%s，原因=%s，http_status=%s，code=%s，err_code=%s",
+            type(exc).__name__, QQ消息错误分类(exc),
+            错误字段["http_status"] if 错误字段["http_status"] is not None else "unknown",
+            错误字段["code"] if 错误字段["code"] is not None else "unknown",
+            错误字段["err_code"] if 错误字段["err_code"] is not None else "unknown",
         )
-        错误文本 = str(exc)
-        if 被动ID and 被动消息ID已过期(exc):
-            # msg_id 已过期：去掉后重试一次主动推送（全量消息群可成功）
+        当前发送异常 = exc
+        if 被动ID and 发送方式 in {"default", "passive"} and (
+            被动消息ID已过期(exc) or 被动回复ID无效(exc)
+        ):
+            # QQ 明确拒绝被动 msg_id 后才可尝试主动发送；未知结果不重放。
             消息体.pop("msg_id", None)
-            if 主动消息是否允许(会话标识, 权限会话类型, appid) is False:
+            if 权限会话类型 == "group":
+                查询权限 = await 查询群主动消息权限(会话标识, appid)
+                if 查询权限 is not True:
+                    return {"ok": False, "message": "发送失败：主动消息权限未开启"}
+            elif 主动消息是否允许(会话标识, 权限会话类型, appid) is False:
                 return {"ok": False, "message": "发送失败：主动消息权限未开启"}
             try:
-                结果 = await _http.request(route, json=消息体)
+                结果 = await 提交QQ消息(_http, route, 消息体, appid)
                 记录主动消息权限(会话标识, 权限会话类型, True, appid)
             except Exception as 重试异常:
                 资源失败结果 = _群资源失败结果(重试异常)
@@ -10152,8 +10168,19 @@ async def 发送消息(
                     return 资源失败结果
                 if 主动消息无权限(重试异常):
                     记录主动消息权限(会话标识, 权限会话类型, False, appid)
-                错误文本 = str(重试异常)
-                logger.warning("消息记录主动重试失败：错误类型=%s，错误详情=%s", type(重试异常).__name__, 错误文本[:400])
+                当前发送异常 = 重试异常
+                字段 = {
+                    "http_status": getattr(重试异常, "status", None),
+                    "code": getattr(重试异常, "code", None),
+                    "err_code": getattr(重试异常, "err_code", None),
+                }
+                logger.warning(
+                    "消息记录主动重试失败：错误类型=%s，原因=%s，http_status=%s，code=%s，err_code=%s",
+                    type(重试异常).__name__, QQ消息错误分类(重试异常),
+                    字段["http_status"] if 字段["http_status"] is not None else "unknown",
+                    字段["code"] if 字段["code"] is not None else "unknown",
+                    字段["err_code"] if 字段["err_code"] is not None else "unknown",
+                )
             else:
                 if isinstance(结果, dict) and 结果.get("id"):
                     响应ID = str(结果.get("id") or "")
@@ -10188,18 +10215,28 @@ async def 发送消息(
                     )
                     _安排图床消息归档(记录, 本地来源=图床本地来源, 已上传结果=已上传图床结果)
                     return {"ok": True, "message_id": 响应ID, "message": _图床发送返回记录(记录)}
-                错误文本 = "重试后仍失败"
         if 类型 == "user" and not 被动ID:
-            return {"ok": False, "message": "私聊发送失败：该用户不在互动窗口内，请先在 QQ 中与该机器人互动一次"}
-        if any(词 in 错误文本 for 词 in ("过期", "expired", "msg_id已过期", "msg_id 已过期")):
-            return {"ok": False, "message": "发送失败：被动消息ID已过期，请先在目标会话发一条新消息后 2 分钟内重试"}
-        if any(词 in 错误文本 for 词 in ("403", "Forbidden", "没有权限", "not allowed", "not_admin", "no permission")):
+            return {
+                "ok": False,
+                "message": "私聊发送失败：该用户不在互动窗口内，请先在 QQ 中与该机器人互动一次",
+                "outcome_unknown": QQ发送结果未知(当前发送异常),
+            }
+        错误字段 = {
+            "http_status": getattr(当前发送异常, "status", None),
+            "code": getattr(当前发送异常, "code", None),
+            "err_code": getattr(当前发送异常, "err_code", None),
+        }
+        错误分类 = QQ消息错误分类(当前发送异常)
+        结果未知 = QQ发送结果未知(当前发送异常)
+        if 错误分类 == "reply_expired":
+            return {"ok": False, "message": "发送失败：被动消息ID已过期，请先在目标会话发一条新消息后 2 分钟内重试", "outcome_unknown": 结果未知}
+        if 错误字段["http_status"] == 403 or 错误分类 in {"permissions_denied", "access_denied"}:
             return {"ok": False, "message": "发送失败：机器人没有该会话的发送权限"}
-        if any(词 in 错误文本 for 词 in ("404", "Not Found", "不存在", "invalid", "无效")):
+        if 错误字段["http_status"] == 404 or 错误分类 in {"invalid_msg_id", "invalid_event_id", "invalid_reply"}:
             return {"ok": False, "message": "发送失败：会话或目标不存在，请刷新会话列表重试"}
-        if "timeout" in 错误文本.lower() or "timed out" in 错误文本.lower():
-            return {"ok": False, "message": "发送失败：请求超时，请稍后重试"}
-        return {"ok": False, "message": "发送失败，请稍后再试"}
+        if 错误分类 == "timeout":
+            return {"ok": False, "message": "发送结果暂不明确，请刷新确认，勿重复发送", "outcome_unknown": True}
+        return {"ok": False, "message": "发送失败，请稍后再试", "outcome_unknown": 结果未知}
 
     响应ID = ""
     if isinstance(结果, dict):
