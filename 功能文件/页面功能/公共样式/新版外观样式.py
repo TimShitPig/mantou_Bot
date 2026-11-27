@@ -206,9 +206,9 @@
     .studio-message-tools button:hover { background: #ffffff0f; color: #fff; }
     .studio-sidebar :focus-visible { outline: 2px solid #7fb59b; outline-offset: 2px; }
 
-    /* ========== 5. 顶栏 ========== */
-    body:not(.messages-workspace) .shell > .topbar { min-height: 56px; padding: 2px 0 12px; gap: 12px; }
-    body:not(.messages-workspace) .topbar .brand-mark {
+    /* ========== 5. 公共顶栏：消息记录与后台其他页面保持同一品牌规格 ========== */
+    .shell > .topbar { min-height: 56px; padding: 2px 0 12px; gap: 12px; }
+    .topbar .brand-mark {
       width: 38px;
       height: 38px;
       flex-basis: 38px;
@@ -217,18 +217,18 @@
       background: #fcfaf4;
       color: #1d1b16;
     }
-    :root[data-theme="dark"] body:not(.messages-workspace) .topbar .brand-mark {
+    :root[data-theme="dark"] .topbar .brand-mark {
       background: #221f19;
       color: #efe7d8;
     }
-    body:not(.messages-workspace) .topbar .brand-mark svg { width: 21px; height: 21px; }
-    body:not(.messages-workspace) .topbar .studio-brand-title {
+    .topbar .brand-mark svg { width: 21px; height: 21px; }
+    .topbar .studio-brand-title {
       font-family: var(--brand-serif);
       font-size: clamp(19px, 2vw, 25px);
       font-weight: 700;
       letter-spacing: .04em;
     }
-    body:not(.messages-workspace) .topbar .version-badge {
+    .topbar .version-badge {
       border-radius: 4px;
       background: transparent;
       color: var(--studio-muted);
@@ -236,23 +236,23 @@
       font-size: 10.5px;
       letter-spacing: .02em;
     }
-    body:not(.messages-workspace) .topbar .theme-toggle-button,
-    body:not(.messages-workspace) .topbar .admin-chip {
+    .topbar .theme-toggle-button,
+    .topbar .admin-chip {
       min-height: 44px;
       border: 1px solid var(--studio-border);
       border-radius: 7px;
       background: transparent;
       color: var(--studio-ink);
     }
-    body:not(.messages-workspace) .topbar .theme-toggle-button { width: 44px; color: var(--studio-muted); }
-    body:not(.messages-workspace) .topbar .theme-toggle-button:hover { color: var(--studio-accent); }
-    body:not(.messages-workspace) .topbar .admin-avatar {
+    .topbar .theme-toggle-button { width: 44px; color: var(--studio-muted); }
+    .topbar .theme-toggle-button:hover { color: var(--studio-accent); }
+    .topbar .admin-avatar {
       border-radius: 4px;
       background: var(--studio-accent-soft);
       color: var(--studio-accent);
       font-size: 11px;
     }
-    body:not(.messages-workspace) .topbar .admin-popover {
+    .topbar .admin-popover {
       border-radius: 9px;
       background: var(--studio-card);
       box-shadow: var(--studio-float-shadow);
@@ -619,16 +619,16 @@
 
     /* ========== 16. 竹青封面：把总览做成一张有记忆点的工作札 ========== */
     /* 导航保持深色书脊，当前页用暖金定位，不依赖轻微的背景色差。 */
-    body:not(.messages-workspace) #console-sidebar .studio-nav-group a[aria-current="page"] {
+    #console-sidebar .studio-nav-group a[aria-current="page"] {
       background: #ffffff0d;
       color: #fffaf0;
       box-shadow: inset 3px 0 0 #dfbd72;
     }
-    body:not(.messages-workspace) #console-sidebar .studio-nav-group a[aria-current="page"] .studio-nav-icon {
+    #console-sidebar .studio-nav-group a[aria-current="page"] .studio-nav-icon {
       background: #dfbd721c;
       color: #f0d99f;
     }
-    body:not(.messages-workspace) #console-sidebar .studio-nav-group a:focus-visible {
+    #console-sidebar .studio-nav-group a:focus-visible {
       outline-color: #f0d99f;
     }
 
