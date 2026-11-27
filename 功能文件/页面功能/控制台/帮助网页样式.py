@@ -533,8 +533,11 @@
       .pan-account-meta > span { min-width:0; overflow:visible; overflow-wrap:anywhere; text-overflow:clip; white-space:normal; }
       .pan-object-arrow { justify-self:end; color:var(--soft); font-size:18px; line-height:1; transition:transform .18s ease; }
       .pan-account-object:hover .pan-object-arrow { transform:translateX(2px); }
-      .pan-account-card-actions { display:flex; box-sizing:border-box; align-items:center; justify-content:space-between; gap:6px; min-height:44px; margin-top:auto; padding:8px 1px 0; border-top:1px solid var(--line); }
-      .pan-account-card-actions .tag { white-space:nowrap; }
+      .pan-account-card-actions { display:grid; box-sizing:border-box; grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr); align-items:center; min-height:44px; margin-top:auto; padding:8px 1px 0; border-top:1px solid var(--line); }
+      .pan-account-card-actions > .tag,.pan-account-card-actions > .pan-account-default { display:inline-flex; box-sizing:border-box; align-items:center; justify-content:center; min-height:28px; line-height:1; white-space:nowrap; }
+      .pan-account-card-actions > .tag:first-child { grid-column:1; justify-self:start; }
+      .pan-account-card-actions > .pan-account-default,.pan-account-card-actions > .pan-account-default-tag { grid-column:2; justify-self:center; width:60px; }
+      .pan-account-card-actions > .pan-account-switch { grid-column:3; justify-self:end; }
       .pan-account-default { min-height:26px; padding:0 7px; border:1px solid #cce4d5; border-radius:5px; background:#f3faf5; color:#318154; font-family:inherit; font-size:10px; font-weight:650; white-space:nowrap; cursor:pointer; }
       .pan-account-default:hover:not(:disabled) { border-color:#8fc4a1; background:#e8f6ed; }
       .pan-account-default:disabled { cursor:not-allowed; opacity:.55; }
@@ -616,7 +619,7 @@
         .pan-account-object { max-width:230px; padding:11px; }
         .pan-object-open { grid-template-columns:48px minmax(0,1fr) 10px; column-gap:8px; }
         .pan-account-avatar { width:48px; height:48px; flex-basis:48px; }
-        .pan-account-card-actions { gap:5px; }
+        .pan-account-card-actions > .tag,.pan-account-card-actions > .pan-account-default { min-height:44px; }
         .pan-object-detail-head { display:grid; grid-template-columns:auto minmax(0,1fr); gap:7px 11px; width:100%; }
         .pan-detail-heading { grid-column:2; }
         .pan-object-detail-head > .pan-platform-switch { grid-column:2; justify-self:start; margin:0; }
