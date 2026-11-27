@@ -6691,14 +6691,30 @@
         const button = $('msg-new-messages');
         if (!button) return;
         const body = $('msg-body');
+        const visible = !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
+        const ready = Boolean(msgState.chatId && msgState.chatAppid === msgState.selectedAppid
+          && (msgState.messages.length || msgState.historyWindow));
+        const atLatest = visible && ready && !msgState.historyWindow && msgBodyNearBottom(body);
+        const pendingCount = Number(msgState.pendingNewMessages || 0);
+        if (atLatest && pendingCount > 0) {
+          msgState.pendingNewMessages = 0;
+          if (!msgState.recalledOnly) {
+            const chatId = msgState.chatId;
+            const chatType = msgState.chatType;
+            const appid = msgState.chatAppid;
+            queueMicrotask(() => {
+              if (document.visibilityState === 'hidden' || $('page-messages')?.hidden
+                || msgState.chatId !== chatId || msgState.chatType !== chatType || msgState.chatAppid !== appid
+                || msgState.historyWindow || msgState.recalledOnly || !msgBodyNearBottom($('msg-body'))) return;
+              markMsgRead(chatId, true, chatType, appid);
+            });
+          }
+        }
         const count = Number(msgState.pendingNewMessages || 0);
         const text = msgState.historyWindow
           ? `返回最新消息${count > 0 ? ` · ${count} 条新消息` : ''}`
           : count > 0 ? `有 ${count} 条新消息` : '回到底部';
-        const visible = !$('page-messages')?.hidden && document.visibilityState !== 'hidden';
-        const ready = Boolean(msgState.chatId && msgState.chatAppid === msgState.selectedAppid
-          && (msgState.messages.length || msgState.historyWindow));
-        const hidden = !visible || !ready || (!msgState.historyWindow && count === 0 && msgBodyNearBottom(body));
+        const hidden = !visible || !ready || (!msgState.historyWindow && msgBodyNearBottom(body));
         const label = $('msg-new-messages-label');
         if (label) label.textContent = text;
         const dot = button.querySelector('.msg-new-messages-dot');
