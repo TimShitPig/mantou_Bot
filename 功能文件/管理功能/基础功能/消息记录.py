@@ -835,6 +835,24 @@ def _快速规范化历史消息(记录: dict[str, Any], *, 允许成员缓存: 
 
 def _消息列表摘要(记录: dict[str, Any]) -> str:
     """正文为空时显示首项媒体类型，不读取媒体地址或下载内容。"""
+    if str(记录.get("content") or "").strip() == "暂不能查看该消息内容":
+        原始消息 = _解析消息结构(记录.get("raw_message"))
+        for _ in range(4):
+            if not isinstance(原始消息, dict):
+                break
+            if _读取字段(原始消息, "message_type") in (3, "3"):
+                卡片 = _读取字段(原始消息, "ark_data")
+                提示 = _读取字段(卡片, "prompt") if isinstance(卡片, dict) else ""
+                if _读取字段(卡片, "ark_type") == "unknown" and isinstance(提示, str):
+                    匹配 = re.fullmatch(r"\[群公告\]([^\r\n]{1,500})", 提示)
+                    正文 = 匹配.group(1).strip() if 匹配 else ""
+                    if 正文 and not any(ord(字符) < 32 and 字符 not in "\t" for 字符 in 正文):
+                        return f"群公告：{正文}"
+            原始消息 = next((
+                _读取字段(原始消息, 字段)
+                for 字段 in ("raw_data", "d", "data", "payload", "message")
+                if isinstance(_读取字段(原始消息, 字段), dict)
+            ), None)
     文本 = _清理附件标签文字(str(记录.get("content") or ""), 记录.get("media"))
     if 文本.strip():
         return 文本

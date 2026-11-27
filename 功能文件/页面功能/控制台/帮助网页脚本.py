@@ -3299,7 +3299,28 @@
         ? message.system_members.slice(0, 20).filter((name) => typeof name === 'string').map((name) => name.trim()).filter(Boolean)
         : [];
       const msgIsWhitespaceOnly = (value) => typeof value === 'string' && value.length > 0 && !value.trim();
+      const msgAnnouncementText = (message) => {
+        if (String(message?.content || '').trim() !== '暂不能查看该消息内容') return '';
+        let raw = message?.raw_message;
+        if (typeof raw === 'string') {
+          if (raw.length > 16384) return '';
+          try { raw = JSON.parse(raw); } catch (_) { return ''; }
+        }
+        for (let depth = 0; raw && typeof raw === 'object' && !Array.isArray(raw) && depth < 4; depth += 1) {
+          if ((raw.message_type === 3 || raw.message_type === '3') && raw.ark_data?.ark_type === 'unknown'
+            && typeof raw.ark_data.prompt === 'string') {
+            const match = /^\[群公告\]([^\r\n]{1,500})$/.exec(raw.ark_data.prompt);
+            const text = match?.[1]?.trim() || '';
+            return text && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(text)
+              ? `群公告：${text}` : '';
+          }
+          raw = raw.raw_data || raw.d || raw.data || raw.payload || raw.message;
+        }
+        return '';
+      };
       const msgMessagePreview = (message) => {
+        const announcement = msgAnnouncementText(message);
+        if (announcement) return announcement;
         const text = String(message.content || '');
         if (text.trim()) return text;
         const media = message.media && typeof message.media === 'object' ? message.media : {};
@@ -3734,7 +3755,8 @@
         const lastTs = Number(existing.last_ts || 0);
         const eventTs = Number(payload.last_ts || message.ts || 0) || lastTs || Math.floor(Date.now() / 1000);
         if (eventTs < lastTs) return {last_content:existing.last_content || '',last_ts:lastTs,last_time:existing.last_time || '',last_message_id:existing.last_message_id || ''};
-        const preview = Object.prototype.hasOwnProperty.call(payload, 'last_content') ? String(payload.last_content || '') : msgMessagePreview(message);
+        const preview = msgAnnouncementText(message)
+          || (Object.prototype.hasOwnProperty.call(payload, 'last_content') ? String(payload.last_content || '') : msgMessagePreview(message));
         return {
           last_content:replaceMsgMentions(preview),
           last_ts:eventTs,
@@ -7993,15 +8015,16 @@
           const segmentedMedia = renderMsgMediaSegments(mediaData, m.message_id, preloadMedia, profiles);
           const mediaTextPosition = media && mediaData && !Array.isArray(mediaData) ? splitMediaTextMarkers(m.content || '') : null;
           const mediaText = mediaData && !Array.isArray(mediaData) ? String(mediaData.text || '') : '';
-          const renderedContent = renderText(m.content || '');
+          const displayContent = msgAnnouncementText(m) || String(m.content || '');
+          const renderedContent = renderText(displayContent);
           let content = stripMediaMarker(renderedContent, mediaData);
           content = stripObjectMarker(content, mediaData);
           content = content.replace(/\uFFFC/g, '').trim();
           if (mediaTextPosition || segmentedMedia) content = '';
           if (!content && mediaText && !segmentedMedia) content = renderText(mediaText);
-          if (!content && !media) content = msgIsWhitespaceOnly(String(m.content || '')) ? '（空白消息）' : '（空消息）';
+          if (!content && !media) content = msgIsWhitespaceOnly(displayContent) ? '（空白消息）' : '（空消息）';
           const contentHtml = content ? renderMsgMessageContent(m, content, profiles) : '';
-          const plainContent = plainMsgPreview(m.content || '', profiles);
+          const plainContent = plainMsgPreview(displayContent, profiles);
           const isWelcomeMessage = botMessage && msgState.chatType === 'group'
             && /^欢迎\s*@.+?\s+加入本群/.test(plainContent)
             && /点击下方按钮查看使用教程和小说列表/.test(plainContent);
