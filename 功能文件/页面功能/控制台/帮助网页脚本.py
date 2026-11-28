@@ -2631,6 +2631,7 @@
       const msgHistoryPrefetch = new Map();
       const msgHistoryRetryDelays = [300, 900];
       let msgHistoryEdgeIntent = null;
+      const msgReturnLatest = {scope:'', pending:false};
       const msgState = { selectedAppid:'', scopeGeneration:0, filter:'all', recalledOnly:false, grouped:false, folderCollapsed:{group:false,user:false}, search:'', page:1, chatId:'', chatType:'group', chatAppid:'', chatRemoved:false, chats:[], realtimeChats:new Map(), groupMembership:new Map(), messages:[], historyData:null, historyWindow:null, historyCache:new Map(), renderedChatId:'', messageRenderSignature:null, initialScrollChatId:'', positionToken:0, positionFrame:null, positionAbort:null, positionObserver:null, positionBody:null, positionTop:null, bottomFollowPaused:false, pendingNewMessages:0, historyRequest:0, historyOlderRequest:0, historyOlderLoading:false, historyScrollTop:0, historyScheduleFrame:null, historyScheduleToken:0, chatListRequest:0, chatListAbort:null, chatListPromise:null, chatListKey:'', chatListRendered:false, chatListServerLoaded:false, chatListTopPending:false, chatListScrollActive:false, chatListPointerActive:false, chatListScrollTimer:null, chatListPendingData:null, chatListRows:[], chatListOffsets:[0], chatListContentHeight:0, chatListRowHeight:52, chatListWindowStart:-1, chatListWindowEnd:-1, historyAbort:null, historyOlderAbort:null, readInFlight:new Set(), chatRenderTimer:null, chatRenderSignature:null, realtimeMessageTimer:null, realtimeMessageCount:0, realtimeToBottom:false, realtimeRenderChatId:'', quote:null, mute:{member:'',name:''}, mutes:new Map(), muteRequestAt:0, sendType:'text', sendMode:'default', muteMinutes:30, timer:null, muteTimer:null, eventSocket:null, eventSource:null, eventTransport:'', eventReconnect:null, eventRefreshTimer:null, eventKeys:new Set(), eventKeyOrder:[], eventKeyPrimaryIds:new Map(), adminByChat:new Map(), adminScanAttempted:new Set(), adminScanFailures:new Map(), adminCheckedAt:new Map(), adminRequestToken:0, lastRolesAt:0, lastRolesChatId:'', lastRolesAppid:'', botIsAdmin:false, botRole:'', adLoaded:false, adEnabled:false, adEditable:false, adLoading:false, adSaving:false, panSelectionData:null, panSelectionRequest:0, panSelectionLoading:false, panSelectionSaving:false, profiles:{}, pastedImage:null, pastedImageFile:null, pastedImageSource:'', composerAttachment:null, mediaData:null, mediaFile:null, mediaName:'', mediaType:0, mediaMime:'', composerSelection:null, sending:false, optimisticSends:new Map(), optimisticSeq:0, multi:false, selected:new Set(), ctxMsg:null, ctxUser:null };
       const syncMsgGroupingToggle = () => {
         const button = $('msg-list-group-toggle');
@@ -6818,7 +6819,10 @@
           }
         }
         const count = Number(msgState.pendingNewMessages || 0);
-        const text = msgState.historyWindow
+        const returningScope = msgReturnLatest.pending && msgReturnLatest.scope === msgQuoteJumpScope();
+        const text = returningScope
+          ? '正在加载最新消息…'
+          : msgState.historyWindow
           ? `返回最新消息${count > 0 ? ` · ${count} 条新消息` : ''}`
           : count > 0 ? `有 ${count} 条新消息` : '回到底部';
         const hidden = !visible || !ready || (!msgState.historyWindow && msgBodyNearBottom(body));
@@ -6828,6 +6832,8 @@
         if (dot) dot.hidden = count === 0;
         button.title = text;
         button.setAttribute('aria-label', text);
+        button.disabled = returningScope;
+        button.setAttribute('aria-busy', String(returningScope));
         if (hidden && !button.hidden && document.activeElement === button && visible) body?.focus({preventScroll:true});
         button.hidden = hidden;
       };
@@ -6847,8 +6853,7 @@
         msgState.bottomFollowPaused = false;
         if (msgState.historyWindow) {
           msgState.initialScrollChatId = msgState.chatId;
-          void loadMsgHistory();
-          return;
+          return loadMsgHistory(false, false, true, false);
         }
         const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         if (behavior === 'auto') {
@@ -6861,6 +6866,30 @@
         }
         clearMsgNewMessages();
         if (!msgState.recalledOnly) markMsgRead(undefined, true, msgState.chatType, msgState.chatAppid);
+      };
+      const returnMsgToLatest = async () => {
+        const body = $('msg-body');
+        if (!body || !msgState.chatId || $('page-messages')?.hidden || document.visibilityState === 'hidden') return;
+        const scope = msgQuoteJumpScope();
+        if (!msgState.historyWindow) {
+          scrollMsgToBottom('smooth');
+          return;
+        }
+        if (msgReturnLatest.pending && msgReturnLatest.scope === scope) return;
+        msgReturnLatest.scope = scope;
+        msgReturnLatest.pending = true;
+        syncMsgNewMessagesDisplay();
+        try {
+          await scrollMsgToBottom('smooth');
+          if (scope === msgQuoteJumpScope() && !msgState.historyWindow && $('msg-body') === body) {
+            scrollMsgBodyToBottom(body, msgState.chatId);
+          }
+        } finally {
+          if (msgReturnLatest.scope === scope) {
+            msgReturnLatest.pending = false;
+            syncMsgNewMessagesDisplay();
+          }
+        }
       };
       const safeMediaUrl = (value) => {
         const raw = String(value ?? '').trim().replace(/&amp;/gi, '&').replace(/&#0*38;?/gi, '&');
@@ -10161,7 +10190,7 @@
         clearMsgNewMessages();
         if (shouldRead && !msgState.recalledOnly) markMsgRead(undefined, true, msgState.chatType, msgState.chatAppid);
       });
-      $('msg-new-messages').addEventListener('click', () => scrollMsgToBottom('smooth'));
+      $('msg-new-messages').addEventListener('click', () => { void returnMsgToLatest(); });
       $('msg-reload').addEventListener('click', refreshMsgConversation);
       $('msg-multi-recall').addEventListener('click', recallSelected);
       $('msg-multi-cancel').addEventListener('click', () => { exitMultiMode(); });

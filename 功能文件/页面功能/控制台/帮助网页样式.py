@@ -1124,6 +1124,8 @@
              .msg-body-wrap { position:relative; display:flex; flex:1 1 0; min-height:0; overflow:hidden; }
              .msg-new-messages { position:absolute; right:18px; bottom:14px; z-index:3; display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:0 12px; border:1px solid #b8dff2; border-radius:17px; background:var(--panel); color:var(--primary); box-shadow:0 5px 16px rgba(30,110,160,.18); font-size:11px; font-weight:700; cursor:pointer; transition:opacity .16s ease, transform .16s ease, box-shadow .16s ease; }
              .msg-new-messages:hover { transform:translateY(-1px); box-shadow:0 7px 18px rgba(30,110,160,.24); }
+             .msg-new-messages:active:not(:disabled) { transform:translateY(0) scale(.98); }
+             .msg-new-messages:disabled { cursor:progress; opacity:.82; }
              .msg-new-messages[hidden] { display:none; }
              .msg-new-messages-dot { width:7px; height:7px; border-radius:50%; background:var(--primary); box-shadow:0 0 0 4px var(--primary-soft); }
              .msg-new-messages-dot[hidden] { display:none; }

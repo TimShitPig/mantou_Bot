@@ -131,21 +131,114 @@ class _公网解析器(aiohttp.abc.AbstractResolver):
         await self._resolver.close()
 
 
+_媒体MIME扩展名 = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/pjpeg": ".jpg",
+    "image/png": ".png", "image/x-png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+    "image/bmp": ".bmp", "image/tiff": ".tif", "image/avif": ".avif",
+    "image/heic": ".heic", "image/heif": ".heif", "image/svg+xml": ".svg", "image/x-icon": ".ico",
+    "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm", "video/x-msvideo": ".avi",
+    "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/ogg": ".ogg",
+    "audio/flac": ".flac", "audio/aac": ".aac", "audio/mp4": ".m4a",
+    "application/pdf": ".pdf", "application/zip": ".zip", "application/x-zip-compressed": ".zip",
+    "application/vnd.rar": ".rar", "application/x-7z-compressed": ".7z",
+    "text/plain": ".txt", "application/json": ".json",
+}
+
+
+def _媒体签名MIME(路径: Path) -> str:
+    """只读文件头的有限字节，以真实格式签名纠正错误类型标记。"""
+    try:
+        with 路径.open("rb") as 文件:
+            头 = 文件.read(64)
+    except (OSError, ValueError):
+        return ""
+    if 头.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if 头.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if 头.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(头) >= 12 and 头[:4] == b"RIFF" and 头[8:12] == b"WEBP":
+        return "image/webp"
+    if 头.startswith(b"BM"):
+        return "image/bmp"
+    if 头.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    if len(头) >= 12 and 头[4:8] == b"ftyp":
+        品牌 = 头[8:12]
+        if 品牌 in {b"avif", b"avis"}:
+            return "image/avif"
+        if 品牌 in {b"heic", b"heix", b"hevc", b"hevx"}:
+            return "image/heic"
+        if 品牌 in {b"mif1", b"msf1"}:
+            return "image/heif"
+        if 品牌 == b"qt  ":
+            return "video/quicktime"
+        if 品牌 in {b"M4A ", b"M4B ", b"M4P ", b"F4A ", b"F4B ", b"mp4a"}:
+            return "audio/mp4"
+        return "video/mp4"
+    if 头.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    if len(头) >= 12 and 头[:4] == b"RIFF" and 头[8:12] == b"AVI ":
+        return "video/x-msvideo"
+    if len(头) >= 12 and 头[:4] == b"RIFF" and 头[8:12] == b"WAVE":
+        return "audio/wav"
+    if 头.startswith(b"fLaC"):
+        return "audio/flac"
+    if 头.startswith(b"OggS") and any(标记 in 头 for 标记 in (b"OpusHead", b"\x01vorbis", b"Speex   ")):
+        return "audio/ogg"
+    if 头.startswith(b"OggS") and b"\x80theora" in 头:
+        return "video/ogg"
+    if 头.startswith(b"%PDF-"):
+        return "application/pdf"
+    if 头.startswith(b"PK\x03\x04"):
+        return "application/zip"
+    if 头.startswith(b"Rar!\x1a\x07"):
+        return "application/vnd.rar"
+    if 头.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return "application/x-7z-compressed"
+    if 头.startswith(b"ID3") or len(头) >= 2 and 头[0] == 0xFF and (头[1] & 0xE0) == 0xE0:
+        return "audio/mpeg"
+    if len(头) >= 2 and 头[0] == 0xFF and (头[1] & 0xF6) == 0xF0:
+        return "audio/aac"
+    return ""
+
+
+def _媒体MIME种类(MIME: Any) -> str:
+    值 = str(MIME or "").split(";", 1)[0].strip().lower()
+    if 值.startswith("image/"):
+        return "image"
+    if 值.startswith("video/"):
+        return "video"
+    if 值.startswith("audio/"):
+        return "audio"
+    if 值 and 值 not in {"application/octet-stream", "binary/octet-stream", "application/x-binary"}:
+        return "file"
+    return ""
+
+
+def _媒体文件名(名称: Any, MIME: str) -> str:
+    """类型已核实时补齐或纠正通用/错误扩展名；保留可用的原文件名。"""
+    原名 = str(名称 or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    扩展名 = _媒体MIME扩展名.get(MIME.lower())
+    if not 扩展名:
+        return 原名 or "file.bin"
+    名称主体, 旧扩展 = os.path.splitext(原名)
+    if not 名称主体 or 原名.lower() in {"file.bin", "media.bin"}:
+        名称主体 = "file"
+    if 旧扩展.lower() == 扩展名 or {旧扩展.lower(), 扩展名} <= {".jpg", ".jpeg"}:
+        return 原名 or 名称主体 + 扩展名
+    if 旧扩展.lower() in {".bin", ".dat", ".tmp"} or not 旧扩展 or 旧扩展.lower() != 扩展名:
+        return 名称主体 + 扩展名
+    return 原名
+
+
 def _种类(项目: dict[str, Any]) -> str:
-    for 字段 in ("media_kind", "type", "media_type"):
-        类型 = str(项目.get(字段) or "").strip().lower()
-        if 类型 in {"图片", "image", "img"}:
-            return "image"
-        if 类型 in {"视频", "video"}:
-            return "video"
-        if 类型 in {"音频", "语音", "audio", "voice", "record", "recordmusic"}:
-            return "audio"
-        if 类型 in {"文件", "file", "document", "files"}:
-            return "file"
-    MIME = str(项目.get("content_type") or 项目.get("mime_type") or "").lower()
-    for 前缀, 类型 in (("image/", "image"), ("video/", "video"), ("audio/", "audio")):
-        if MIME.startswith(前缀):
-            return 类型
+    # 只有内容签名或明确 MIME 能确认媒体类型；段标签、扩展名和通用 MIME 都不作证据。
+    for 字段 in ("detected_content_type", "content_type", "mime_type"):
+        分类 = _媒体MIME种类(项目.get(字段))
+        if 分类:
+            return 分类
     return "file"
 
 
@@ -538,8 +631,12 @@ async def _保存状态(参数: dict[str, Any], 新归档: dict[str, Any]) -> No
 def _新状态(参数: dict[str, Any], 状态: str, **字段: Any) -> dict[str, Any]:
     已有 = 参数.get("archive")
     结果 = copy.deepcopy(已有) if isinstance(已有, dict) else {}
-    结果.update(status=状态, media_kind=_种类(参数["item"]),
-              source_fingerprint=hashlib.sha256(_源地址(参数["item"]).encode()).hexdigest(), **字段)
+    结果.update({
+        "status": 状态,
+        "media_kind": 参数.get("_resolved_media_kind") or _种类(参数["item"]),
+        "source_fingerprint": hashlib.sha256(_源地址(参数["item"]).encode()).hexdigest(),
+        **字段,
+    })
     if 状态 in {"queued", "downloading", "downloaded", "uploading", "stored"} and "error_stage" not in 字段:
         结果.pop("error_stage", None)
     return 结果
@@ -739,6 +836,7 @@ async def _准备本地文件(参数: dict[str, Any]) -> Path:
     大小, MIME = await _下载来源(地址, 路径, 允许公网=参数["record"].get("is_self") is True)
     参数["local_complete"] = True
     参数["local"]["complete"] = True
+    参数["local"]["content_type"] = MIME
     await _保存状态(参数, _新状态(参数, "downloaded", local_path=str(路径), local_complete=True, size=大小, content_type=MIME))
     return 路径
 
@@ -787,8 +885,18 @@ async def _执行归档(参数: dict[str, Any]) -> None:
         路径 = await _准备本地文件(参数)
         本地 = 参数.get("local") or {}
         项目 = 参数["item"]
-        原名 = str(本地.get("original_name") or 本地.get("name") or 项目.get("name") or 项目.get("filename") or "file.bin")
-        await _保存状态(参数, _新状态(参数, "downloaded", local_path=str(路径), local_complete=True))
+        签名MIME = await asyncio.to_thread(_媒体签名MIME, 路径)
+        声明MIME = str(本地.get("content_type") or 项目.get("content_type") or 项目.get("mime_type") or "").split(";", 1)[0].strip().lower()
+        识别MIME = 签名MIME or 声明MIME
+        if 识别MIME:
+            本地["detected_content_type"] = 签名MIME
+            本地["content_type"] = 识别MIME
+        种类 = _种类({**项目, **本地})
+        参数["_resolved_media_kind"] = 种类
+        原名 = _媒体文件名(本地.get("original_name") or 本地.get("name") or 项目.get("name") or 项目.get("filename"), 识别MIME)
+        本地["original_name"] = 原名
+        await _保存状态(参数, _新状态(参数, "downloaded", local_path=str(路径), local_complete=True,
+                                         media_kind=种类, content_type=识别MIME or "application/octet-stream"))
         async def 提交前(进度: Any = None) -> None:
             旧进度 = (参数.get("archive") or {}).get("progress")
             值 = {**(旧进度 if isinstance(旧进度, dict) else {}), **(进度 if isinstance(进度, dict) else {})}
@@ -802,7 +910,7 @@ async def _执行归档(参数: dict[str, Any]) -> None:
             await _保存状态(参数, _新状态(参数, "uploading", progress=干净进度, local_path=str(路径), local_complete=True))
         当前进度 = 归档.get("progress") if isinstance(归档, dict) else None
         结果 = await 自建图床.上传文件(
-            路径, Token, 文件名=原名, 媒体种类=_种类({**项目, **本地}),
+            路径, Token, 文件名=原名, 媒体种类=种类,
             提交前=提交前, 进度回调=保存进度, 进度=copy.deepcopy(当前进度) if isinstance(当前进度, dict) else None,
         )
         if not isinstance(结果, dict) or not _图床地址(结果.get("url")):
