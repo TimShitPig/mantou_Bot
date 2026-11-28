@@ -3599,11 +3599,17 @@
               || (message._session && String(message._session) !== msgState.chatId))) {
             toast('暂未匹配到原消息'); return;
           }
-          msgState.historyWindow = {scope, oldest_id:Number(data.oldest_id || 0), newest_id:Number(data.newest_id || 0), has_newer:Boolean(data.has_newer)};
+          const pendingCount = Number(msgState.pendingNewMessages || 0);
+          msgState.historyWindow = {
+            scope,
+            oldest_id:Number(data.oldest_id || 0),
+            newest_id:Number(data.newest_id || 0),
+            has_newer:Boolean(data.has_newer) || pendingCount > 0,
+            newerEventGeneration:0,
+          };
           msgState.messages = messages;
           msgState.messageRenderSignature = null;
           renderMsgMessages({...data, messages}, {preservePosition:true, previousTop:0});
-          const pendingCount = msgState.pendingNewMessages;
           clearMsgNewMessages();
           if (pendingCount > 0) showMsgNewMessages(pendingCount);
           const targetRow = located.messageId
@@ -3611,6 +3617,7 @@
             : findMsgReferenceRow(located.refidx);
           if (!targetRow) { toast('暂未匹配到原消息'); return; }
           highlightMsgReference(targetRow, 'auto');
+          if (pendingCount > 0) markMsgHistoryWindowHasNewer($('msg-body'));
         } catch (error) {
           if (!current()) return;
           if (error.status === 401) showAuthError(error);
@@ -3685,6 +3692,7 @@
         const {chatType, chatId, chatAppid} = msgState;
         const generation = msgQuoteJump.generation;
         const scope = msgScopeKey(chatType, chatId, chatAppid);
+        const newerEventGeneration = Number(windowState.newerEventGeneration || 0);
         const prefetched = takeMsgHistoryPrefetch(direction, scope, JSON.stringify(cursor));
         const controller = prefetched?.controller || new AbortController();
         msgQuoteJump.pageAbort = controller;
@@ -3725,7 +3733,10 @@
           const trimmed = removed.length > 0;
           const history = msgState.historyData || {};
           const hasMore = older ? Boolean(data.has_more) && merged.length > existing.length : trimmed || Boolean(history.has_more);
-          windowState.has_newer = older ? trimmed || windowState.has_newer : Boolean(data.has_newer) && merged.length > existing.length;
+          const newerEventArrivedDuringRequest = Number(windowState.newerEventGeneration || 0) > newerEventGeneration;
+          windowState.has_newer = older
+            ? trimmed || windowState.has_newer
+            : (Boolean(data.has_newer) && merged.length > existing.length) || newerEventArrivedDuringRequest;
           updateMsgWindowCursors(windowState, messages);
           if (windowState.browsing && !windowState.has_newer && !msgState.pendingNewMessages) {
             msgState.historyWindow = null;
@@ -8461,6 +8472,7 @@
           }
           if (messageChanged || profilesChanged || referencesChanged) scheduleMsgRealtimeMessageRender(chatId, false, false);
         } else if (isNewEvent && (msgState.historyWindow || msgQuoteJump.pending)) {
+          if (msgState.historyWindow) markMsgHistoryWindowHasNewer(body);
           showMsgNewMessages(1);
         } else if (isNewEvent) {
           msgState.messages = sortMsgMessagesByHistoryOrder([...msgState.messages, realtimeMessage]);
@@ -9968,6 +9980,20 @@
             cursorKey:'', retries:0, running:false, retryTimer:null, exhausted:false};
         }
         resumeMsgHistoryEdge();
+      };
+      const markMsgHistoryWindowHasNewer = (body = $('msg-body')) => {
+        const windowState = msgState.historyWindow;
+        if (!windowState || windowState.scope !== msgQuoteJumpScope()) return;
+        windowState.has_newer = true;
+        windowState.newerEventGeneration = Number(windowState.newerEventGeneration || 0) + 1;
+        const prefetched = msgHistoryPrefetch.get('after');
+        if (!msgQuoteJump.pagePending && prefetched?.scope === windowState.scope) {
+          prefetched.controller.abort();
+          msgHistoryPrefetch.delete('after');
+        }
+        if (body && msgBodyNearBottom(body, msgHistorySwitchDistance(body))) {
+          queueMsgHistoryEdge(body, 'after');
+        }
       };
       const maybeLoadOlderMessages = (body, upwardDistance) => {
         if (upwardDistance > 0) queueMsgHistoryEdge(body, 'before');
