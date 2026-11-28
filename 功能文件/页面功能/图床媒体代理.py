@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import re
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -104,6 +105,10 @@ async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文
                 大小, 探测类型 = await _探测大小(客户端, 地址)
                 原内容类型 = 原内容类型 or 探测类型
             内容类型 = str(原内容类型 or "application/octet-stream").split(";", 1)[0].lower()
+            if 内容类型 == "application/octet-stream" and 模式 == "video":
+                推测类型 = mimetypes.guess_type(urlsplit(地址).path)[0] or ""
+                if 推测类型.startswith("video/"):
+                    内容类型 = 推测类型
             if 大小 is not None and 大小 <= 0:
                 return web.Response(status=502, text="媒体文件不可用")
             if not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", 内容类型):
@@ -114,7 +119,7 @@ async def 处理图床媒体(request: web.Request, 地址: str, 模式: str, 文
                 "Content-Type": 内容类型, "Accept-Ranges": "bytes",
                 "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400",
                 "Content-Security-Policy": "sandbox; default-src 'none'",
-                "Content-Disposition": "inline" if 模式 in {"image", "avatar"} else "attachment; filename*=UTF-8''" + quote(文件名, safe=""),
+                "Content-Disposition": "inline" if 模式 in {"image", "avatar", "video"} else "attachment; filename*=UTF-8''" + quote(文件名, safe=""),
             }
             if 大小 is None:
                 响应头["Accept-Ranges"] = "none"

@@ -7133,7 +7133,7 @@
           }
         }));
       };
-      const messageMediaProxyRevision = 'imgbed-2';
+      const messageMediaProxyRevision = 'imgbed-3';
       const mediaProxyUrl = (src, mode = 'image', name = '', appid = consoleAppid) => {
         const direct = safeMediaUrl(src);
         if (!direct) return '';
@@ -7146,11 +7146,13 @@
         const tutorialImage = tutorialImageUrls.get(src);
         if (tutorialImage) return `/tutorial-images/${tutorialImage}`;
         try {
+          const imgbedUrl = msgImgbedUrl(direct);
+          if (imgbedUrl && ['image', 'avatar'].includes(mode)) return imgbedUrl;
           const host = new URL(direct).hostname.toLowerCase().replace(/\.$/, '');
           const allowed = ['multimedia.nt.qq.com.cn', 'qqbot.ugcimg.cn', 'gchat.qpic.cn', 'qpic.cn', 'qlogo.cn', 'qq.com.cn', 'qq.com'];
-          const shouldProxy = Boolean(msgImgbedUrl(direct)) || allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+          const shouldProxy = Boolean(imgbedUrl) || allowed.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
           if (!shouldProxy) return direct;
-          const query = new URLSearchParams({src: direct, mode: ['image', 'avatar'].includes(mode) ? mode : 'file'});
+          const query = new URLSearchParams({src: direct, mode: ['image', 'avatar', 'video'].includes(mode) ? mode : 'file'});
           if (/^\d{4,32}$/.test(String(appid || ''))) query.set('appid', appid);
           // 新版本绕过浏览器中旧版 200 占位响应，仍由服务端按 src 统一处理失败冷却。
           query.set('v', messageMediaProxyRevision);
@@ -7203,7 +7205,7 @@
           }
           if (isVideo && src) {
             if (browserKey) return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" data-browser-media-key="${esc(browserKey)}"></video></div>`;
-            const videoUrl = mediaProxyUrl(src, 'file');
+            const videoUrl = mediaProxyUrl(src, 'video');
             return `<div data-msg-media-key="${mediaKey}" class="msg-media msg-video-media"><video controls preload="metadata" src="${esc(videoUrl || src)}" data-media-direct="${esc(src)}"></video>${saveBadge}</div>`;
           }
           const name = mediaFileName(item, src);

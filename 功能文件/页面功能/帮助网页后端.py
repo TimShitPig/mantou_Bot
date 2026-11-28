@@ -1576,6 +1576,10 @@ def _识别媒体类型(响应类型: Any, 前缀: bytes, 地址: str, 模式: s
         类型 = mimetypes.guess_type(urlsplit(地址).path)[0] or ""
         if 类型.startswith("image/"):
             return 类型
+    elif 模式 == "video":
+        类型 = mimetypes.guess_type(urlsplit(地址).path)[0] or ""
+        if 类型.startswith("video/"):
+            return 类型
     return 类型 or "application/octet-stream"
 
 
@@ -1665,7 +1669,7 @@ def _媒体代理请求超时(模式: str) -> ClientTimeout:
         # 头像使用短预算，避免 CDN 无响应时长时间占用浏览器及上游连接。
         return ClientTimeout(total=5, connect=5, sock_connect=3, sock_read=3, ceil_threshold=6)
     return ClientTimeout(
-        total=None if 模式 == "file" else 媒体代理超时秒,
+        total=None if 模式 in {"file", "video"} else 媒体代理超时秒,
         # connect 包含连接池等待；实际新建连接仍单独限制为十秒。
         connect=媒体代理超时秒,
         sock_connect=媒体代理连接超时秒,
@@ -1697,7 +1701,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
     if len(地址) > 8192 or not _允许媒体地址(地址):
         return web.Response(status=400, text="媒体地址无效")
     模式 = str(request.query.get("mode") or "image").strip().lower()
-    if 模式 not in {"image", "avatar", "file"}:
+    if 模式 not in {"image", "avatar", "video", "file"}:
         模式 = "file"
     显示图片 = 模式 in {"image", "avatar"}
     范围头 = str(request.headers.get("Range") or "").strip()
@@ -1800,7 +1804,7 @@ async def _处理消息媒体(request: web.Request) -> web.StreamResponse:
                     响应头["Accept-Ranges"] = "bytes"
                 elif 上游.headers.get("Accept-Ranges") in {"bytes", "none"}:
                     响应头["Accept-Ranges"] = 上游.headers["Accept-Ranges"]
-                if 显示图片:
+                if 显示图片 or 模式 == "video":
                     响应头["Content-Disposition"] = "inline"
                 else:
                     响应头["Content-Disposition"] = (
