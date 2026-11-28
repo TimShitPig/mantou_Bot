@@ -3739,14 +3739,25 @@
             ? trimmed || windowState.has_newer
             : (Boolean(data.has_newer) && merged.length > existing.length) || newerEventArrivedDuringRequest;
           updateMsgWindowCursors(windowState, messages);
-          if (windowState.browsing && !windowState.has_newer && !msgState.pendingNewMessages) {
-            msgState.historyWindow = null;
-          }
+          // 后续页已确认没有更多消息，且请求期间没有新事件时，历史窗口可以安全收尾。
+          // 不能依赖 browsing 或 pendingNewMessages：引用跳转窗口可能没有 browsing，
+          // 而 pendingNewMessages 只有退出历史窗口后才会清零，会造成状态死锁。
+          const reachedLatest = !older && !windowState.has_newer && !newerEventArrivedDuringRequest;
+          const followLatest = reachedLatest && msgBodyNearBottom(body);
+          if (reachedLatest) msgState.historyWindow = null;
           const next = {
             ...history, ...data, messages, has_more:hasMore, has_newer:windowState.has_newer,
             member_profiles:mergeMsgProfileMaps(history.member_profiles, data.member_profiles),
           };
-          renderMsgMessages(next, {prepend:older, preservePosition:true, preserveAnchor:true, viewportReady:true, previousTop, previousHeight});
+          renderMsgMessages(next, {
+            prepend:older,
+            preservePosition:!followLatest,
+            preserveAnchor:!followLatest,
+            toBottom:followLatest,
+            viewportReady:true,
+            previousTop,
+            previousHeight,
+          });
           if (!msgState.historyWindow) cacheMsgHistory(scope, next);
           else {
             if (remainder && merged.length > existing.length) {
