@@ -21,6 +21,40 @@ _图片类型 = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "
 _素材缓存 = globals().get("_素材缓存") or {}
 _素材上传任务 = globals().get("_素材上传任务") or {}
 _结果未知素材 = globals().get("_结果未知素材") or {}
+_素材缓存上限 = 512
+_未知结果上限 = 512
+
+
+def _清理素材缓存(当前时间: float | None = None) -> None:
+    """移除过期/异常成功项，并把成功缓存限制在固定上限内。"""
+    当前时间 = time.time() if 当前时间 is None else 当前时间
+    for 键, 值 in tuple(_素材缓存.items()):
+        try:
+            截止 = float(值.get("cache_until") or 0) if isinstance(值, dict) else 0
+        except (TypeError, ValueError, OverflowError):
+            截止 = 0
+        if 截止 <= 当前时间:
+            _素材缓存.pop(键, None)
+    while len(_素材缓存) > _素材缓存上限:
+        最早键 = min(
+            _素材缓存,
+            key=lambda 项: float((_素材缓存.get(项) or {}).get("cache_until") or 0),
+        )
+        _素材缓存.pop(最早键, None)
+
+
+def _限制成功素材缓存() -> None:
+    while len(_素材缓存) >= _素材缓存上限:
+        try:
+            最早键 = min(
+                _素材缓存,
+                key=lambda 项: float((_素材缓存.get(项) or {}).get("cache_until") or 0),
+            )
+        except (TypeError, ValueError, OverflowError):
+            最早键 = next(iter(_素材缓存), None)
+        if 最早键 is None:
+            break
+        _素材缓存.pop(最早键, None)
 
 
 class QQ素材错误(RuntimeError):
@@ -144,7 +178,8 @@ async def 上传Markdown图片(http: Any, appid: str, 数据: bytes) -> dict[str
                 客户端._retry_connection = False
             async with 客户端.put(地址, data=数据, headers={"Content-Type": 资料["content_type"]}, allow_redirects=False) as 响应:
                 if not 200 <= 响应.status < 300:
-                    raise QQ素材错误("upload", 响应.status)
+                    # 5xx 可能发生在对象已收下数据之后；不得把它当成明确拒绝再发起另一条上传。
+                    raise QQ素材错误("upload", 响应.status, unknown=响应.status >= 500)
                 ETag = str(响应.headers.get("ETag") or "").strip('"').lower()
                 if ETag and ETag != MD5:
                     raise QQ素材错误("upload_etag", 响应.status)
@@ -167,20 +202,27 @@ async def 获取Markdown图片(http: Any, appid: str, 数据: bytes) -> dict[str
     """按认证 AppID 和原图摘要单飞；取消等待者也等待本次上传收尾，不重传未知结果。"""
     _校验认证(http, appid)
     键 = appid, hashlib.sha256(数据).hexdigest()
+    _清理素材缓存()
     已存 = _素材缓存.get(键)
-    if isinstance(已存, dict) and float(已存.get("cache_until") or 0) > time.time():
+    if isinstance(已存, dict):
         return copy.deepcopy(已存)
     未知 = _结果未知素材.get(键)
     if isinstance(未知, dict):
-        raise QQ素材错误(未知["stage"], 未知.get("status"), 未知.get("code"), unknown=True)
+        raise QQ素材错误(未知.get("stage", "unknown_result"), 未知.get("status"), 未知.get("code"), unknown=True)
     任务 = _素材上传任务.get(键)
     if 任务 is None:
+        # 每个新上传都先占用一个未知结果预算；这样同时在途任务即使全部
+        # 得到未知结果，也不会突破有界防重状态容量。
+        if len(_结果未知素材) + len(_素材上传任务) >= _未知结果上限:
+            raise QQ素材错误("unknown_cache_full")
         async def 单次上传() -> dict[str, Any]:
             try:
                 结果 = await 上传Markdown图片(http, appid, 数据)
                 # complete.ttl 是官方滑动窗口；本地只保守使用这次确认时的截止，不伪造 expires_at。
                 有效期 = 结果["ttl"]
                 结果["cache_until"] = time.time() + 有效期 - min(60, max(1, 有效期 // 10))
+                _清理素材缓存()
+                _限制成功素材缓存()
                 _素材缓存[键] = copy.deepcopy(结果)
                 return 结果
             except asyncio.CancelledError:
@@ -193,7 +235,7 @@ async def 获取Markdown图片(http: Any, appid: str, 数据: bytes) -> dict[str
             finally:
                 if _素材上传任务.get(键) is asyncio.current_task():
                     _素材上传任务.pop(键, None)
-        任务 = asyncio.create_task(单次上传(), name="QQ教程本地素材上传")
+        任务 = asyncio.create_task(单次上传(), name="QQ官方图片素材上传")
         _素材上传任务[键] = 任务
     try:
         return copy.deepcopy(await asyncio.shield(任务))
